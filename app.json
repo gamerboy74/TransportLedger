@@ -33,6 +33,14 @@
     "scheme": "transport-ledger",
     "experiments": {
       "typedRoutes": true
+    },
+    "extra": {
+      "router": {
+        "origin": false
+      },
+      "eas": {
+        "projectId": "bf620dd5-4cb5-4f98-98d7-a54d007d13ec"
+      }
     }
   }
 }
