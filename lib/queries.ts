@@ -49,12 +49,17 @@ export async function upsertTransportOwner(data: Partial<TransportOwner> & { nam
   );
 }
 
+export async function deleteTransportOwner(id: string): Promise<void> {
+  const { error } = await supabase.from('transport_owners').delete().eq('id', id);
+  if (error) throw error;
+}
+
 // ── Vehicles ─────────────────────────────────────────────────
 
 export async function getVehicles(transportOwnerId: string): Promise<Vehicle[]> {
   const { data, error } = await supabase
     .from('vehicles')
-    .select('id,transport_owner_id,reg_number,owner_name,owner_contact,gst_commission_rate,created_at')
+    .select('id,transport_owner_id,reg_number,owner_name,owner_contact,commission_rate,accidental_rate,gst_commission_rate,created_at')
     .eq('transport_owner_id', transportOwnerId)
     .order('reg_number');
   if (error) throw error;
@@ -65,7 +70,7 @@ export async function getVehiclesByOwnerIds(ownerIds: string[]): Promise<Vehicle
   if (!ownerIds.length) return [];
   const { data, error } = await supabase
     .from('vehicles')
-    .select('id,transport_owner_id,reg_number,owner_name,owner_contact,gst_commission_rate,created_at')
+    .select('id,transport_owner_id,reg_number,owner_name,owner_contact,commission_rate,accidental_rate,gst_commission_rate,created_at')
     .in('transport_owner_id', ownerIds)
     .order('reg_number');
   if (error) throw error;
@@ -75,7 +80,7 @@ export async function getVehiclesByOwnerIds(ownerIds: string[]): Promise<Vehicle
 export async function getVehicle(id: string): Promise<Vehicle | null> {
   const { data, error } = await supabase
     .from('vehicles')
-    .select('id,transport_owner_id,reg_number,owner_name,owner_contact,gst_commission_rate,created_at')
+    .select('id,transport_owner_id,reg_number,owner_name,owner_contact,commission_rate,accidental_rate,gst_commission_rate,created_at')
     .eq('id', id)
     .single();
   if (error) throw error;
@@ -97,10 +102,35 @@ export async function upsertVehicle(data: Partial<Vehicle> & { transport_owner_i
       reg_number: data.reg_number,
       owner_name: data.owner_name,
       owner_contact: (data as any).owner_contact ?? null,
+      commission_rate: Number((data as any).commission_rate ?? 0),
+      accidental_rate: Number((data as any).accidental_rate ?? 0),
       gst_commission_rate: Number((data as any).gst_commission_rate ?? 0),
       created_at: new Date().toISOString(),
     } as Vehicle,
   );
+}
+
+export async function deleteVehicle(id: string): Promise<void> {
+  // Fast path: a single delete is enough when FK constraints are ON DELETE CASCADE.
+  const { error } = await supabase.from('vehicles').delete().eq('id', id);
+  if (!error) return;
+
+  // Fallback for older DB schemas where child tables might still block vehicle deletion.
+  if ((error as any)?.code !== '23503') throw error;
+
+  const [tripsRes, dieselRes, gstRes, deductionsRes, paymentsRes] = await Promise.all([
+    supabase.from('trip_entries').delete().eq('vehicle_id', id),
+    supabase.from('diesel_logs').delete().eq('vehicle_id', id),
+    supabase.from('gst_entries').delete().eq('vehicle_id', id),
+    supabase.from('other_deductions').delete().eq('vehicle_id', id),
+    supabase.from('payments').delete().eq('vehicle_id', id),
+  ]);
+
+  const childError = tripsRes.error || dieselRes.error || gstRes.error || deductionsRes.error || paymentsRes.error;
+  if (childError) throw childError;
+
+  const { error: retryError } = await supabase.from('vehicles').delete().eq('id', id);
+  if (retryError) throw retryError;
 }
 
 // ── Routes ───────────────────────────────────────────────────
@@ -536,3 +566,111 @@ export async function getVehiclePayments(vehicleId: string, month: string): Prom
   if (error) throw error;
   return round2((data ?? []).reduce((s, p) => s + Number(p.amount), 0));
 }
+
+// ── Challan Entries ──────────────────────────────────────────
+//  Only select the columns the UI actually uses — skips transporter/source/
+//  destination which are always null in the current flow.
+
+const CHALLAN_COLS = [
+  'id', 'vehicle_id', 'month', 'trip_date',
+  'challan_no', 'vehicle_no', 'tr_no',
+  'gross_weight_kg', 'tare_weight_kg', 'net_weight_kg',
+  'created_at',
+].join(',');
+
+export interface ChallanEntry {
+  id: string;
+  vehicle_id: string;
+  month: string;
+  trip_date: string;
+  tr_no: string | null;
+  challan_no: string | null;
+  vehicle_no: string | null;
+  transporter: string | null;
+  destination: string | null;
+  source: string | null;
+  tare_weight_kg: number | null;
+  gross_weight_kg: number | null;
+  net_weight_kg: number | null;
+  created_at: string;
+}
+
+/** Single vehicle, single month — used by ChallanForm in entry screen */
+export async function getChallanEntries(vehicleId: string, month: string): Promise<ChallanEntry[]> {
+  const { data, error } = await supabase
+    .from('challan_entries')
+    .select(CHALLAN_COLS)
+    .eq('vehicle_id', vehicleId)
+    .eq('month', month)
+    .order('trip_date')
+    .order('created_at');
+  if (error) throw error;
+  return (data ?? []) as unknown as ChallanEntry[];
+}
+
+/**
+ * BULK fetch — replaces the N+1 Promise.all() pattern in challan-logs.tsx.
+ * One single .in() round-trip regardless of how many vehicles are selected.
+ */
+export async function getChallanEntriesByVehicleIds(
+  vehicleIds: string[],
+  month: string,
+): Promise<ChallanEntry[]> {
+  if (vehicleIds.length === 0) return [];
+  const { data, error } = await supabase
+    .from('challan_entries')
+    .select(CHALLAN_COLS)
+    .in('vehicle_id', vehicleIds)
+    .eq('month', month)
+    .order('trip_date', { ascending: false })
+    .order('created_at', { ascending: false });
+  if (error) throw error;
+  return (data ?? []) as unknown as ChallanEntry[];
+}
+
+/** Year-level bulk fetch (for Excel export) — one call, not N calls */
+export async function getChallanEntriesForYear(vehicleId: string, year: string): Promise<ChallanEntry[]> {
+  const { data, error } = await supabase
+    .from('challan_entries')
+    .select(CHALLAN_COLS)
+    .eq('vehicle_id', vehicleId)
+    .like('month', `${year}-%`)
+    .order('trip_date')
+    .order('created_at');
+  if (error) throw error;
+  return (data ?? []) as unknown as ChallanEntry[];
+}
+
+export async function addChallanEntry(data: Omit<ChallanEntry, 'id' | 'created_at'>): Promise<ChallanEntry> {
+  const { data: result, error } = await supabase
+    .from('challan_entries')
+    .insert(data)
+    .select(CHALLAN_COLS)
+    .single();
+  if (error) throw error;
+  return result as unknown as ChallanEntry;
+}
+
+/**
+ * Proper PATCH — replaces the previous delete+insert edit pattern.
+ * Atomic: one round-trip, no data loss window between delete and re-insert.
+ */
+export async function updateChallanEntry(
+  id: string,
+  patch: Partial<Omit<ChallanEntry, 'id' | 'created_at' | 'vehicle_id'>>,
+): Promise<ChallanEntry> {
+  const { data, error } = await supabase
+    .from('challan_entries')
+    .update(patch)
+    .eq('id', id)
+    .select(CHALLAN_COLS)
+    .single();
+  if (error) throw error;
+  return data as unknown as ChallanEntry;
+}
+
+export async function deleteChallanEntry(id: string): Promise<void> {
+  const { error } = await supabase.from('challan_entries').delete().eq('id', id);
+  if (error) throw error;
+}
+

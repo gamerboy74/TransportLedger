@@ -1,6 +1,17 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { enqueueOfflineAction, getOfflineQueueItems } from '../lib/offlineQueue';
 
+jest.mock('../lib/supabase', () => ({
+  supabase: {
+    from: jest.fn(() => ({
+      upsert: jest.fn(async () => ({ error: null })),
+      insert: jest.fn(async () => ({ error: null })),
+      update: jest.fn(() => ({ eq: jest.fn(async () => ({ error: null })) })),
+      delete: jest.fn(() => ({ eq: jest.fn(async () => ({ error: null })) })),
+    })),
+  },
+}));
+
 jest.mock('@react-native-async-storage/async-storage', () => {
   const store: Record<string, string> = {};
   return {

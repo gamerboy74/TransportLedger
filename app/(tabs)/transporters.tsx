@@ -1,20 +1,29 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, RefreshControl, Modal, TextInput, Pressable } from 'react-native';
+import { View, Text, FlatList, TouchableOpacity, RefreshControl, Modal, TextInput, Pressable } from 'react-native';
 import { router, useFocusEffect } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { Swipeable } from 'react-native-gesture-handler';
 import { SkeletonBlock, SkeletonCard } from '../../components/Skeleton';
 import { useThemedNotice } from '../../components/ThemedNoticeProvider';
-import { upsertTransportOwner } from '../../lib/queries';
+import ThemedConfirmModal from '../../components/ThemedConfirmModal';
+import { deleteTransportOwner, upsertTransportOwner } from '../../lib/queries';
 import { fetchTransportersSummary } from '../../lib/summaries';
 import { fmtShort, monthKey, monthLabel } from '../../constants/defaults';
 import type { TransportOwner } from '../../types';
 
+const SWIPE_FRICTION = 1.8;
+const SWIPE_RIGHT_THRESHOLD = 32;
+const SWIPE_DRAG_OFFSET = 24;
+
 export default function TransportersScreen() {
   const [showAdd, setShowAdd]   = useState(false);
   const [editingOwner, setEditingOwner] = useState<TransportOwner | null>(null);
-  const listRef = useRef<ScrollView | null>(null);
+  const [ownerToDelete, setOwnerToDelete] = useState<TransportOwner | null>(null);
+  const listRef = useRef<FlatList<{ owner: TransportOwner; vehicleCount: number; balance: number }> | null>(null);
+  const swipeRefs = useRef<Record<string, Swipeable | null>>({});
+  const [openSwipeId, setOpenSwipeId] = useState<string | null>(null);
   const month = monthKey();
   const queryClient = useQueryClient();
   const notice = useThemedNotice();
@@ -22,7 +31,6 @@ export default function TransportersScreen() {
   const { data, isLoading, isFetching, error, refetch } = useQuery({
     queryKey: ['transportersSummary', month],
     queryFn: () => fetchTransportersSummary(month),
-    refetchInterval: 45_000,
   });
 
   const rows = data ?? [];
@@ -34,7 +42,7 @@ export default function TransportersScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      listRef.current?.scrollTo({ y: 0, animated: false });
+      listRef.current?.scrollToOffset({ offset: 0, animated: false });
     }, [])
   );
 
@@ -61,7 +69,7 @@ export default function TransportersScreen() {
         <View style={{ marginBottom: 12 }}>
           <Text style={{ color: '#111111', fontSize: 26, fontWeight: '800' }}>Transport Owners</Text>
           <Text style={{ color: '#6b5c67', fontSize: 13 }}>{monthLabel(month)}</Text>
-          <Text style={{ color: '#8d7a86', fontSize: 11, marginTop: 4 }}>Hold an owner card to edit commission and accidental rates</Text>
+          <Text style={{ color: '#8d7a86', fontSize: 11, marginTop: 4 }}>Hold to edit rates, swipe left to delete owner</Text>
         </View>
         <TouchableOpacity
           onPress={() => setShowAdd(true)}
@@ -73,55 +81,99 @@ export default function TransportersScreen() {
         </TouchableOpacity>
       </View>
 
-      <ScrollView ref={listRef} style={{ flex: 1, paddingHorizontal: 16 }}
-        refreshControl={<RefreshControl refreshing={isFetching && !isLoading} onRefresh={() => { void refetch(); }} tintColor="#ec4899" />}>
-        {loading && (
-          <>
-            <SkeletonCard>
-              <SkeletonBlock style={{ height: 16, width: 160, marginBottom: 8 }} />
-              <SkeletonBlock style={{ height: 12, width: 120, marginBottom: 10 }} />
-              <SkeletonBlock style={{ height: 10, width: 90 }} />
-            </SkeletonCard>
-            <SkeletonCard>
-              <SkeletonBlock style={{ height: 16, width: 170, marginBottom: 8 }} />
-              <SkeletonBlock style={{ height: 12, width: 130, marginBottom: 10 }} />
-              <SkeletonBlock style={{ height: 10, width: 100 }} />
-            </SkeletonCard>
-            <SkeletonCard>
-              <SkeletonBlock style={{ height: 16, width: 150, marginBottom: 8 }} />
-              <SkeletonBlock style={{ height: 12, width: 125, marginBottom: 10 }} />
-              <SkeletonBlock style={{ height: 10, width: 86 }} />
-            </SkeletonCard>
-          </>
-        )}
-        {!loading && rows.length === 0 && (
-          <View style={{ alignItems: 'center', marginTop: 64 }}>
-            <Text style={{ fontSize: 48 }}>🚛</Text>
-            <Text style={{ color: '#111111', fontSize: 18, fontWeight: 'bold', marginTop: 16 }}>No transport owners yet</Text>
-            <Text style={{ color: '#6b5c67', marginTop: 4 }}>Tap + Add to get started</Text>
-          </View>
-        )}
-        {rows.map(({ owner, vehicleCount, balance }) => (
-          <TouchableOpacity key={owner.id} onPress={() => router.push(`/transporter/${owner.id}`)} onLongPress={() => setEditingOwner(owner)} delayLongPress={260}
-            style={{ backgroundColor: '#ffffffcc', borderColor: '#f2d7e6', borderWidth: 1, borderRadius: 18, padding: 16, marginBottom: 10 }}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-              <View style={{ flex: 1 }}>
-                <Text style={{ color: '#111111', fontSize: 16, fontWeight: 'bold' }}>{owner.name}</Text>
-                <Text style={{ color: '#6b5c67', fontSize: 12, marginTop: 2 }}>
-                  {vehicleCount} vehicles · ₹{owner.commission_rate}/T com · ₹{owner.accidental_rate}/T acc
-                </Text>
+      <FlatList
+        ref={listRef}
+        data={loading ? [] : rows}
+        keyExtractor={(item) => item.owner.id}
+        style={{ flex: 1, paddingHorizontal: 16 }}
+        contentContainerStyle={{ paddingBottom: 32 }}
+        refreshControl={<RefreshControl refreshing={isFetching && !isLoading} onRefresh={() => { void refetch(); }} tintColor="#ec4899" />}
+        renderItem={({ item: { owner, vehicleCount, balance } }) => (
+          <Swipeable
+            ref={(ref) => {
+              swipeRefs.current[owner.id] = ref;
+            }}
+            friction={SWIPE_FRICTION}
+            rightThreshold={SWIPE_RIGHT_THRESHOLD}
+            dragOffsetFromRightEdge={SWIPE_DRAG_OFFSET}
+            overshootRight={false}
+            onSwipeableWillOpen={() => {
+              if (openSwipeId && openSwipeId !== owner.id) {
+                swipeRefs.current[openSwipeId]?.close();
+              }
+              setOpenSwipeId(owner.id);
+            }}
+            onSwipeableClose={() => {
+              if (openSwipeId === owner.id) setOpenSwipeId(null);
+            }}
+            renderRightActions={() => (
+              <View style={{ flexDirection: 'row', marginBottom: 10 }}>
+                <TouchableOpacity
+                  onPress={() => {
+                    swipeRefs.current[owner.id]?.close();
+                    setOwnerToDelete(owner);
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Delete transport owner"
+                  style={{ width: 82, borderRadius: 12, backgroundColor: '#ef4444', alignItems: 'center', justifyContent: 'center' }}
+                >
+                  <Ionicons name="trash-outline" size={16} color="#ffffff" />
+                  <Text style={{ color: '#ffffff', fontSize: 11, marginTop: 3, fontWeight: '700' }}>Delete</Text>
+                </TouchableOpacity>
               </View>
-              <View style={{ alignItems: 'flex-end' }}>
-                <Text style={{ color: balance >= 0 ? '#22c55e' : '#ef4444', fontSize: 16, fontWeight: 'bold' }}>
-                  {fmtShort(Math.abs(balance))}
-                </Text>
-                <Text style={{ color: '#6b5c67', fontSize: 11 }}>{balance >= 0 ? 'balance' : 'overpaid'}</Text>
+            )}
+          >
+            <TouchableOpacity
+              onPress={() => router.push(`/transporter/${owner.id}`)}
+              onLongPress={() => setEditingOwner(owner)}
+              delayLongPress={260}
+              style={{ backgroundColor: '#ffffffcc', borderColor: '#f2d7e6', borderWidth: 1, borderRadius: 18, padding: 16, marginBottom: 10 }}
+            >
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                <View style={{ flex: 1 }}>
+                  <Text style={{ color: '#111111', fontSize: 16, fontWeight: 'bold' }}>{owner.name}</Text>
+                  <Text style={{ color: '#6b5c67', fontSize: 12, marginTop: 2 }}>
+                    {vehicleCount} vehicles · ₹{owner.commission_rate}/T com · ₹{owner.accidental_rate}/T acc
+                  </Text>
+                </View>
+                <View style={{ alignItems: 'flex-end' }}>
+                  <Text style={{ color: balance >= 0 ? '#22c55e' : '#ef4444', fontSize: 16, fontWeight: 'bold' }}>
+                    {fmtShort(Math.abs(balance))}
+                  </Text>
+                  <Text style={{ color: '#6b5c67', fontSize: 11 }}>{balance >= 0 ? 'balance' : 'overpaid'}</Text>
+                </View>
               </View>
+            </TouchableOpacity>
+          </Swipeable>
+        )}
+        ListEmptyComponent={
+          loading ? (
+            <>
+              <SkeletonCard>
+                <SkeletonBlock style={{ height: 16, width: 160, marginBottom: 8 }} />
+                <SkeletonBlock style={{ height: 12, width: 120, marginBottom: 10 }} />
+                <SkeletonBlock style={{ height: 10, width: 90 }} />
+              </SkeletonCard>
+              <SkeletonCard>
+                <SkeletonBlock style={{ height: 16, width: 170, marginBottom: 8 }} />
+                <SkeletonBlock style={{ height: 12, width: 130, marginBottom: 10 }} />
+                <SkeletonBlock style={{ height: 10, width: 100 }} />
+              </SkeletonCard>
+              <SkeletonCard>
+                <SkeletonBlock style={{ height: 16, width: 150, marginBottom: 8 }} />
+                <SkeletonBlock style={{ height: 12, width: 125, marginBottom: 10 }} />
+                <SkeletonBlock style={{ height: 10, width: 86 }} />
+              </SkeletonCard>
+            </>
+          ) : (
+            <View style={{ alignItems: 'center', marginTop: 64 }}>
+              <Text style={{ fontSize: 48 }}>🚛</Text>
+              <Text style={{ color: '#111111', fontSize: 18, fontWeight: 'bold', marginTop: 16 }}>No transport owners yet</Text>
+              <Text style={{ color: '#6b5c67', marginTop: 4 }}>Tap + Add to get started</Text>
             </View>
-          </TouchableOpacity>
-        ))}
-        <View style={{ height: 32 }} />
-      </ScrollView>
+          )
+        }
+      />
 
       <AddOwnerModal
         visible={showAdd}
@@ -143,6 +195,29 @@ export default function TransportersScreen() {
           void queryClient.invalidateQueries({ queryKey: ['transportersSummary', month] });
           void queryClient.invalidateQueries({ queryKey: ['homeSummary', month] });
           void refetch();
+        }}
+      />
+
+      <ThemedConfirmModal
+        visible={!!ownerToDelete}
+        title="Delete Transport Owner"
+        message={ownerToDelete ? `Delete owner ${ownerToDelete.name}? All linked vehicles, trips, diesel logs, GST entries, deductions, income and payments will also be removed.` : ''}
+        confirmLabel="Delete"
+        cancelLabel="Cancel"
+        destructive
+        onCancel={() => setOwnerToDelete(null)}
+        onConfirm={async () => {
+          if (!ownerToDelete) return;
+          try {
+            await deleteTransportOwner(ownerToDelete.id);
+            setOwnerToDelete(null);
+            notice.showSuccess('Deleted', 'Transport owner removed successfully.');
+            void queryClient.invalidateQueries({ queryKey: ['transportersSummary', month] });
+            void queryClient.invalidateQueries({ queryKey: ['homeSummary', month] });
+            void refetch();
+          } catch (e) {
+            notice.showError('Error', String(e));
+          }
         }}
       />
     </SafeAreaView>

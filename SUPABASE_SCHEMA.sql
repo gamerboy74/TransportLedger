@@ -20,6 +20,8 @@ CREATE TABLE IF NOT EXISTS vehicles (
   reg_number            TEXT NOT NULL,
   owner_name            TEXT NOT NULL,
   owner_contact         TEXT,
+  commission_rate       NUMERIC(10,2) NOT NULL DEFAULT 0,
+  accidental_rate       NUMERIC(10,2) NOT NULL DEFAULT 0,
   gst_commission_rate   NUMERIC(5,4) NOT NULL DEFAULT 0.10,
   created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -96,16 +98,75 @@ CREATE TABLE IF NOT EXISTS transport_income (
 CREATE TABLE IF NOT EXISTS payments (
   id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   transport_owner_id  UUID REFERENCES transport_owners(id) ON DELETE CASCADE,
-  vehicle_id          UUID REFERENCES vehicles(id),
+  vehicle_id          UUID REFERENCES vehicles(id) ON DELETE CASCADE,
   paid_to             TEXT NOT NULL,
   amount              NUMERIC(12,2) NOT NULL,
   date                DATE NOT NULL,
-  mode                TEXT NOT NULL CHECK (mode IN ('cheque','upi')),
+  mode                TEXT NOT NULL CHECK (mode IN ('cheque','upi','other')),
   reference           TEXT,
   note                TEXT,
   month               TEXT NOT NULL,
   created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE payments DROP CONSTRAINT IF EXISTS payments_mode_check;
+ALTER TABLE payments
+  ADD CONSTRAINT payments_mode_check
+  CHECK (mode IN ('cheque','upi','other'));
+
+ALTER TABLE payments DROP CONSTRAINT IF EXISTS payments_vehicle_id_fkey;
+ALTER TABLE payments
+  ADD CONSTRAINT payments_vehicle_id_fkey
+  FOREIGN KEY (vehicle_id)
+  REFERENCES vehicles(id)
+  ON DELETE CASCADE;
+
+ALTER TABLE trip_entries DROP CONSTRAINT IF EXISTS trip_entries_vehicle_id_fkey;
+ALTER TABLE trip_entries
+  ADD CONSTRAINT trip_entries_vehicle_id_fkey
+  FOREIGN KEY (vehicle_id)
+  REFERENCES vehicles(id)
+  ON DELETE CASCADE;
+
+ALTER TABLE diesel_logs DROP CONSTRAINT IF EXISTS diesel_logs_vehicle_id_fkey;
+ALTER TABLE diesel_logs
+  ADD CONSTRAINT diesel_logs_vehicle_id_fkey
+  FOREIGN KEY (vehicle_id)
+  REFERENCES vehicles(id)
+  ON DELETE CASCADE;
+
+ALTER TABLE gst_entries DROP CONSTRAINT IF EXISTS gst_entries_vehicle_id_fkey;
+ALTER TABLE gst_entries
+  ADD CONSTRAINT gst_entries_vehicle_id_fkey
+  FOREIGN KEY (vehicle_id)
+  REFERENCES vehicles(id)
+  ON DELETE CASCADE;
+
+ALTER TABLE other_deductions DROP CONSTRAINT IF EXISTS other_deductions_vehicle_id_fkey;
+ALTER TABLE other_deductions
+  ADD CONSTRAINT other_deductions_vehicle_id_fkey
+  FOREIGN KEY (vehicle_id)
+  REFERENCES vehicles(id)
+  ON DELETE CASCADE;
+
+CREATE TABLE IF NOT EXISTS challan_entries (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  vehicle_id      UUID NOT NULL REFERENCES vehicles(id) ON DELETE CASCADE,
+  month           TEXT NOT NULL,            -- YYYY-MM
+  trip_date       DATE NOT NULL,
+  tr_no           TEXT,
+  challan_no      TEXT,
+  vehicle_no      TEXT,
+  transporter     TEXT,
+  destination     TEXT,
+  source          TEXT,
+  tare_weight_kg  NUMERIC(10,2),
+  gross_weight_kg NUMERIC(10,2),
+  net_weight_kg   NUMERIC(10,2),
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+ALTER TABLE challan_entries DISABLE ROW LEVEL SECURITY;
 
 -- ── Indexes ───────────────────────────────────────────────────
 

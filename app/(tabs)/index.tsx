@@ -39,7 +39,7 @@ export default function HomeScreen() {
   } = useQuery({
     queryKey: ['homeSummary', month],
     queryFn: () => fetchHomeSummary(month),
-    refetchInterval: 45_000,
+    refetchInterval: 120_000,
   });
 
   const loading = isLoading;

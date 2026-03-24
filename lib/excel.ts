@@ -779,3 +779,184 @@ export async function exportVehicleSettlement(
   emitProgress(onProgress, '95% Opening share dialog...');
   await shareWb(wb, `${vehicle.reg_number}_${transporter.name.replace(/\s+/g, '_')}_${suffix}.xlsx`);
 }
+
+// ─── EXPORT D: Vehicle Challan Sheet ──────────────────────────
+// Format matches user's Excel screenshot exactly:
+//   Row 1 : Owner name — merged header
+//   Row 2 : MONTH | Oct-2025 | WORK ORDER NO | (blank)
+//   Row 3 : SL | DATE | VEHICLE NO | CHALLAN NO | Gross weight | Tare weight | Tonne weight | Net weight
+//   Data  : weights in tonnes (÷1000), net = gross − tare
+//   Total : summed net tonnes
+
+export async function exportVehicleChallanSheet(
+  owner: TransportOwner,
+  vehicle: Vehicle,
+  year: string,
+  onProgress?: ProgressCallback,
+): Promise<void> {
+  if (!/^\d{4}$/.test(year)) throw new Error('Year must be YYYY');
+
+  const MONTHS_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const MONTHS_FULL  = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+
+  emitProgress(onProgress, '10% Fetching challan data...');
+
+  const { getChallanEntriesForYear } = require('./queries');
+  const allRows: any[] = await getChallanEntriesForYear(vehicle.id, year);
+
+  if (!allRows.length) throw new Error('No challan entries found for this vehicle in ' + year);
+
+  // ── Group by Work Order first ──
+  const byWorkOrder: Record<string, any[]> = {};
+  for (const row of allRows) {
+    const wo = (row.tr_no || '').trim();
+    if (!byWorkOrder[wo]) byWorkOrder[wo] = [];
+    byWorkOrder[wo].push(row);
+  }
+
+  const workOrders = Object.keys(byWorkOrder).sort();
+
+  // ── Colour palette (matching user's screenshot) ──
+  const HEADER_BG = '1F3864';   // dark navy — row 1 name banner
+  const META_BG   = 'D9E1F2';   // light blue — row 2 metadata
+  const COL_BG    = '2E75B6';   // medium blue — column header row 3
+  const ALT1      = 'EBF3FF';   // light blue alternate rows
+  const ALT2      = 'FFFFFF';   // white alternate rows
+  const TOTAL_BG  = 'FFC000';   // amber — total row
+
+  const hStyle: S = { bold: true, bg: COL_BG, fg: 'FFFFFF', align: 'center', sz: 10 };
+  const NCOLS = 8; // SL DATE VEH CHALLAN GROSS TARE TONNE NET
+
+  // For each Work Order, create a separate workbook and share it
+  for (let woIdx = 0; woIdx < workOrders.length; woIdx++) {
+    const wo = workOrders[woIdx];
+    const woRows = byWorkOrder[wo];
+
+    // Group by month
+    const byMonth: Record<string, any[]> = {};
+    for (const row of woRows) {
+      const m = String(row.month ?? '').slice(0, 7);
+      if (!byMonth[m]) byMonth[m] = [];
+      byMonth[m].push(row);
+    }
+
+    const months = Object.keys(byMonth).sort();
+    const wb = XLSX.utils.book_new();
+    const woLabel = wo ? `WO_${wo.replace(/[^a-zA-Z0-9_-]/g, '_')}` : 'No_WO';
+
+    months.forEach((monthStr, sheetIdx) => {
+      const progress = Math.round(10 + ((woIdx * months.length + sheetIdx + 1) / (workOrders.length * months.length)) * 80);
+      emitProgress(onProgress, `${progress}% Building ${monthStr} for ${wo || 'Unknown WO'}...`);
+
+      const ws: XLSX.WorkSheet = { '!ref': 'A1:A1' };
+      const rows = byMonth[monthStr];
+
+      const mi        = Number(monthStr.split('-')[1]) - 1;
+      const sheetName = MONTHS_SHORT[mi];                   // "Oct"
+      const monLabel  = `${MONTHS_FULL[mi]}-${year}`;      // "October-2025"
+
+      // ── Row 1: Transporter/Owner name — full-width banner ──
+      const ownerName = owner.name;
+      for (let c = 1; c <= NCOLS; c++) {
+        sc(ws, 1, c, s(c === 1 ? ownerName : '', {
+          bold: true, bg: HEADER_BG, fg: 'FFFFFF',
+          sz: 14, align: 'center', wrap: true,
+        }));
+      }
+      merge(ws, 1, 1, 1, NCOLS);
+
+      // ── Row 2: Metadata — single merged cell across all columns ──
+      const metaText = [
+        `MONTH: ${monLabel}`,
+        wo ? `WORK ORDER NO: ${wo}` : 'WORK ORDER NO: —',
+        `VEHICLE: ${vehicle.reg_number}`,
+      ].join('          ');
+      for (let c = 1; c <= NCOLS; c++) {
+        sc(ws, 2, c, s(c === 1 ? metaText : '', {
+          bold: true, bg: META_BG, align: 'center', sz: 10, wrap: false,
+        }));
+      }
+      merge(ws, 2, 1, 2, NCOLS);
+
+      // ── Row 3: Column headers ──
+      sc(ws, 3, 1, s('SL',            hStyle));
+      sc(ws, 3, 2, s('DATE',          hStyle));
+      sc(ws, 3, 3, s('VEHICLE NO',    hStyle));
+      sc(ws, 3, 4, s('CHALLAN NO',    hStyle));
+      sc(ws, 3, 5, s('Gross Wt (T)',  hStyle));
+      sc(ws, 3, 6, s('Tare Wt (T)',   hStyle));
+      sc(ws, 3, 7, s('Tonne Weight',  hStyle));
+      sc(ws, 3, 8, s('Net Weight (T)', hStyle));
+
+      // ── Data rows ──
+      let totalNetT = 0;
+      rows.forEach((r: any, i: number) => {
+        const row     = 4 + i;
+        const bg      = i % 2 === 0 ? ALT1 : ALT2;
+        const grossKg = Number(r.gross_weight_kg ?? 0);
+        const tareKg  = Number(r.tare_weight_kg  ?? 0);
+        const netKg   = Number(r.net_weight_kg   ?? 0);
+
+        const grossT  = round2(grossKg / 1000);
+        const tareT   = round2(tareKg  / 1000);
+        const netT    = round2(netKg   / 1000);
+        const tonneW  = round2(grossT - tareT);
+
+        totalNetT += netT;
+
+        sc(ws, row, 1, s(i + 1,                              { bg, align: 'center', sz: 10 }));
+        sc(ws, row, 2, s(fmtDate(r.trip_date),               { bg, align: 'center', sz: 10 }));
+        sc(ws, row, 3, s(r.vehicle_no ?? vehicle.reg_number, { bg, align: 'center', sz: 10 }));
+        sc(ws, row, 4, s(r.challan_no ?? '',                 { bg, align: 'left',   sz: 10 }));
+        sc(ws, row, 5, s(grossT, { bg, align: 'center', sz: 10, fmt: '0.000' }));
+        sc(ws, row, 6, s(tareT,  { bg, align: 'center', sz: 10, fmt: '0.000' }));
+        sc(ws, row, 7, s(tonneW, { bg, align: 'center', sz: 10, fmt: '0.000', bold: true }));
+        sc(ws, row, 8, s(netT,   { bg, align: 'center', sz: 10, fmt: '0.000', bold: true }));
+      });
+
+      // ── Blank spacer row before total ──
+      const spacerRow = 4 + rows.length;
+      for (let c = 1; c <= NCOLS; c++) sc(ws, spacerRow, c, s('', { bg: ALT2 }));
+
+      // ── Total row ──
+      const totRow = 5 + rows.length;
+      const totS: S = { bold: true, bg: TOTAL_BG, fg: '000000', align: 'center', sz: 11 };
+      sc(ws, totRow, 1, s('TOTAL',               totS));
+      sc(ws, totRow, 2, s(rows.length + ' trips', totS));
+      sc(ws, totRow, 3, s('', { bg: TOTAL_BG }));
+      sc(ws, totRow, 4, s('', { bg: TOTAL_BG }));
+      sc(ws, totRow, 5, s('', { bg: TOTAL_BG }));
+      sc(ws, totRow, 6, s('', { bg: TOTAL_BG }));
+      sc(ws, totRow, 7, s('', { bg: TOTAL_BG }));
+      sc(ws, totRow, 8, s(round2(totalNetT), { ...totS, fmt: '0.000' }));
+      merge(ws, totRow, 1, totRow, 2);
+
+      // ── Column widths ──
+      ws['!cols'] = [
+        { wch: 5 },   // SL
+        { wch: 14 },  // DATE
+        { wch: 14 },  // VEHICLE NO
+        { wch: 24 },  // CHALLAN NO — widest, left-aligned content
+        { wch: 14 },  // Gross Wt
+        { wch: 14 },  // Tare Wt
+        { wch: 14 },  // Tonne Weight
+        { wch: 15 },  // Net Weight
+      ];
+
+      // ── Row heights ──
+      ws['!rows'] = [
+        { hpt: 28 },  // Row 1: owner banner
+        { hpt: 18 },  // Row 2: metadata
+        { hpt: 22 },  // Row 3: column headers
+        ...rows.map(() => ({ hpt: 16 })),
+        { hpt: 6  },  // spacer
+        { hpt: 20 },  // total
+      ];
+
+      XLSX.utils.book_append_sheet(wb, ws, sheetName.substring(0, 31));
+    });
+
+    emitProgress(onProgress, `95% Opening share dialog for ${wo || 'Unknown WO'}...`);
+    await shareWb(wb, `Vehicle_${vehicle.reg_number}_Challans_${woLabel}_${year}.xlsx`);
+  }
+}

@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { AppState } from 'react-native';
-import { flushOfflineQueue } from '../lib/offlineQueue';
+import { flushOfflineQueue, getOfflineQueueSize } from '../lib/offlineQueue';
 import { queryClient } from '../lib/queryClient';
 
 export function OfflineQueueManager() {
@@ -8,6 +8,9 @@ export function OfflineQueueManager() {
 
   useEffect(() => {
     const run = async () => {
+      const size = await getOfflineQueueSize();
+      if (size === 0) return;
+
       const { processed } = await flushOfflineQueue();
       if (processed > 0) {
         await queryClient.invalidateQueries();
@@ -21,7 +24,7 @@ export function OfflineQueueManager() {
       if (state === 'active') {
         void run();
       }
-    }, 20_000);
+    }, 60_000);
 
     const sub = AppState.addEventListener('change', (state) => {
       if (state === 'active') {

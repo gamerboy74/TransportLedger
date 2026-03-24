@@ -13,6 +13,8 @@ export interface Vehicle {
   reg_number: string;
   owner_name: string;
   owner_contact: string | null;
+  commission_rate: number;
+  accidental_rate: number;
   gst_commission_rate: number;
   created_at: string;
 }
@@ -91,7 +93,7 @@ export interface Payment {
   paid_to: string;
   amount: number;
   date: string;
-  mode: 'cheque' | 'upi';
+  mode: 'cheque' | 'upi' | 'other';
   reference: string | null;
   note: string | null;
   month: string;

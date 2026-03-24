@@ -49,3 +49,23 @@ export async function writeDieselInsights(cacheKey: string, insights: DieselInsi
     // Ignore cache write failures.
   }
 }
+
+export async function invalidateDieselInsights(cacheKey: string): Promise<void> {
+  try {
+    await AsyncStorage.removeItem(makeKey(cacheKey));
+  } catch {
+    // Ignore cache remove failures.
+  }
+}
+
+export async function invalidateDieselInsightsForMonth(month: string): Promise<void> {
+  try {
+    const allKeys = await AsyncStorage.getAllKeys();
+    const monthPrefix = `${KEY_PREFIX}:${month}|`;
+    const keysToRemove = allKeys.filter((k) => k.startsWith(monthPrefix));
+    if (!keysToRemove.length) return;
+    await AsyncStorage.multiRemove(keysToRemove);
+  } catch {
+    // Ignore cache remove failures.
+  }
+}

@@ -28,14 +28,12 @@ export default function ReportsScreen() {
   const { data: bootstrapData, isLoading, isFetching: isBootstrapFetching, error: bootstrapError, refetch: refetchBootstrap } = useQuery({
     queryKey: ['reportsBootstrap'],
     queryFn: fetchReportsBootstrap,
-    refetchInterval: 45_000,
   });
 
   const { data: ownerVehicles = [], isFetching: isVehiclesFetching, error: vehiclesError, refetch: refetchVehicles } = useQuery({
     queryKey: ['ownerVehicles', selOwner?.id ?? 'none'],
     queryFn: () => getVehicles(selOwner!.id),
     enabled: !!selOwner,
-    refetchInterval: 45_000,
   });
 
   const owners = bootstrapData?.owners ?? [];
@@ -76,9 +74,11 @@ export default function ReportsScreen() {
     }, [])
   );
 
-  const doExport = async (type: 'diesel' | 'ledger' | 'vehicle') => {
+  const doExport = async (type: 'diesel' | 'ledger' | 'vehicle' | 'challan') => {
     if (!selOwner) { notice.showInfo('Required', 'Select an owner first'); return; }
-    if (type === 'vehicle' && !selVehicle) { notice.showInfo('Required', 'Select a vehicle first'); return; }
+    if ((type === 'vehicle' || type === 'challan') && !selVehicle) {
+      notice.showInfo('Required', 'Select a vehicle first'); return;
+    }
 
     if (!/^\d{4}-\d{2}-\d{2}$/.test(exportDate)) {
       notice.showInfo('Invalid date', 'Please select a valid date.');
@@ -86,6 +86,7 @@ export default function ReportsScreen() {
     }
 
     const month = exportDate.slice(0, 7);
+    const year  = exportDate.slice(0, 4);
     if (!/^\d{4}-\d{2}$/.test(month) || Number(month.split('-')[1]) < 1 || Number(month.split('-')[1]) > 12) {
       notice.showInfo('Invalid month', 'Please select a valid month for export.');
       return;
@@ -94,11 +95,12 @@ export default function ReportsScreen() {
     setExporting(true);
     setExportProgress('Preparing export...');
     try {
-      const { exportDieselSheet, exportTransporterLedger, exportVehicleSettlement } = require('../../lib/excel');
+      const { exportDieselSheet, exportTransporterLedger, exportVehicleSettlement, exportVehicleChallanSheet } = require('../../lib/excel');
       const onProgress = (message: string) => setExportProgress(message);
       if (type === 'diesel')  await exportDieselSheet(selOwner, vehicles, month, dieselPeriod === 'full' ? undefined : dieselPeriod, onProgress);
       if (type === 'ledger')  await exportTransporterLedger(selOwner, vehicles, month, onProgress);
       if (type === 'vehicle' && selVehicle) await exportVehicleSettlement(selVehicle, selOwner, month, onProgress);
+      if (type === 'challan' && selVehicle) await exportVehicleChallanSheet(selOwner, selVehicle, year, onProgress);
       notice.showSuccess('Export Ready', 'File generated successfully.');
     } catch (e) { notice.showError('Export failed', String(e)); }
     finally {
@@ -238,9 +240,10 @@ export default function ReportsScreen() {
 
           <Text style={{ color: '#6b5c67', fontSize: 11, fontWeight: '700', marginBottom: 12, textTransform: 'uppercase', letterSpacing: 0.7 }}>Excel Exports</Text>
           {[
-            { emoji: '⛽', title: 'Diesel Tracking Sheet', sub: 'Selected month diesel log', type: 'diesel' as const, needsVehicle: false },
+                      { emoji: '⛽', title: 'Diesel Tracking Sheet', sub: 'Selected month diesel log', type: 'diesel' as const, needsVehicle: false },
             { emoji: '💳', title: 'Transporter Ledger', sub: 'Selected month payment ledger', type: 'ledger' as const, needsVehicle: false },
             { emoji: '📄', title: 'Vehicle Settlement Voucher', sub: 'Selected month settlement', type: 'vehicle' as const, needsVehicle: true },
+            { emoji: '🧾', title: 'Challan Report', sub: 'Full-year challan sheet per month', type: 'challan' as const, needsVehicle: true },
           ].map(btn => {
             const disabled = !selOwner || exporting || (btn.needsVehicle && !selVehicle);
             return (
