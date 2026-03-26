@@ -1,5 +1,5 @@
 // app/challan-logs.tsx — Full-screen Challan Logs, mirrors diesel-logs.tsx pattern
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, TextInput,
   RefreshControl, Modal, StyleSheet, Alert, FlatList, ActivityIndicator
@@ -413,16 +413,17 @@ function ChallanEditModal({ entry, onClose, onSaved }: {
   const [saving, setSaving]       = useState(false);
   const notice = useThemedNotice();
 
-  const handleGross = (v: string) => {
-    setGrossKg(v);
-    const g = parseFloat(v), t = parseFloat(tareKg);
-    if (!isNaN(g) && !isNaN(t) && g > t) setNetKg(String(g - t));
-  };
-  const handleTare = (v: string) => {
-    setTareKg(v);
-    const g = parseFloat(grossKg), t = parseFloat(v);
-    if (!isNaN(g) && !isNaN(t) && g > t) setNetKg(String(g - t));
-  };
+  // Auto-calculate net weight when gross or tare changes
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      const g = parseFloat(grossKg), t = parseFloat(tareKg);
+      if (!isNaN(g) && !isNaN(t) && g > t) {
+        const nextNet = String(g - t);
+        if (nextNet !== netKg) setNetKg(nextNet);
+      }
+    }, 150);
+    return () => clearTimeout(handler);
+  }, [grossKg, tareKg, netKg]);
 
   const save = async () => {
     if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) { notice.showInfo('Required', 'Enter valid date'); return; }
@@ -458,8 +459,8 @@ function ChallanEditModal({ entry, onClose, onSaved }: {
           <ThemedDateField label="Date" value={date} onChange={setDate} required />
           <ThemedTextInput label="Challan No" value={challanNo} onChangeText={setChallanNo} placeholder="e.g. C92501775/877" />
           <View style={{ flexDirection: 'row', gap: 8, marginBottom: 14 }}>
-            <View style={{ flex: 1 }}><ThemedTextInput label="Gross (kg)" value={grossKg} onChangeText={handleGross} keyboardType="decimal-pad" /></View>
-            <View style={{ flex: 1 }}><ThemedTextInput label="Tare (kg)"  value={tareKg}  onChangeText={handleTare}  keyboardType="decimal-pad" /></View>
+            <View style={{ flex: 1 }}><ThemedTextInput label="Gross (kg)" value={grossKg} onChangeText={setGrossKg} keyboardType="decimal-pad" /></View>
+            <View style={{ flex: 1 }}><ThemedTextInput label="Tare (kg)"  value={tareKg}  onChangeText={setTareKg}  keyboardType="decimal-pad" /></View>
           </View>
           <ThemedTextInput label="Net Weight (kg) *" value={netKg} onChangeText={setNetKg} keyboardType="decimal-pad" />
           {!!netKg && !isNaN(parseFloat(netKg)) && (
@@ -499,8 +500,17 @@ function ChallanAddModal({ vehicleId, vehicle, month, onClose, onSaved }: {
   const [saving, setSaving]       = useState(false);
   const notice = useThemedNotice();
 
-  const handleGross = (v: string) => { setGrossKg(v); const g = parseFloat(v), t = parseFloat(tareKg); if (!isNaN(g) && !isNaN(t) && g > t) setNetKg(String(g - t)); };
-  const handleTare  = (v: string) => { setTareKg(v);  const g = parseFloat(grossKg), t = parseFloat(v);  if (!isNaN(g) && !isNaN(t) && g > t) setNetKg(String(g - t)); };
+  // Auto-calculate net weight when gross or tare changes
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      const g = parseFloat(grossKg), t = parseFloat(tareKg);
+      if (!isNaN(g) && !isNaN(t) && g > t) {
+        const nextNet = String(g - t);
+        if (nextNet !== netKg) setNetKg(nextNet);
+      }
+    }, 150);
+    return () => clearTimeout(handler);
+  }, [grossKg, tareKg, netKg]);
 
   const save = async () => {
     if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) { notice.showInfo('Required', 'Enter valid date'); return; }
@@ -510,7 +520,8 @@ function ChallanAddModal({ vehicleId, vehicle, month, onClose, onSaved }: {
       const entry = await addChallanEntry({
         vehicle_id: vehicleId, month: date.slice(0, 7), trip_date: date,
         challan_no: challanNo.trim() || null, vehicle_no: vehicle?.reg_number ?? null,
-        tr_no: null, transporter: null, destination: null, source: null,
+        tr_no: null,
+        transporter: null, destination: null, source: null,
         gross_weight_kg: grossKg ? Number(grossKg) : null,
         tare_weight_kg:  tareKg  ? Number(tareKg)  : null,
         net_weight_kg:   Number(netKg),
@@ -534,8 +545,8 @@ function ChallanAddModal({ vehicleId, vehicle, month, onClose, onSaved }: {
           <ThemedDateField label="Date" value={date} onChange={setDate} required />
           <ThemedTextInput label="Challan No" value={challanNo} onChangeText={setChallanNo} placeholder="e.g. C92501775/877" />
           <View style={{ flexDirection: 'row', gap: 8, marginBottom: 14 }}>
-            <View style={{ flex: 1 }}><ThemedTextInput label="Gross (kg)" value={grossKg} onChangeText={handleGross} keyboardType="decimal-pad" /></View>
-            <View style={{ flex: 1 }}><ThemedTextInput label="Tare (kg)"  value={tareKg}  onChangeText={handleTare}  keyboardType="decimal-pad" /></View>
+            <View style={{ flex: 1 }}><ThemedTextInput label="Gross (kg)" value={grossKg} onChangeText={setGrossKg} keyboardType="decimal-pad" /></View>
+            <View style={{ flex: 1 }}><ThemedTextInput label="Tare (kg)"  value={tareKg}  onChangeText={setTareKg}  keyboardType="decimal-pad" /></View>
           </View>
           <ThemedTextInput label="Net Weight (kg) *" value={netKg} onChangeText={setNetKg} keyboardType="decimal-pad" />
           {!!netKg && !isNaN(parseFloat(netKg)) && parseFloat(netKg) > 0 && (

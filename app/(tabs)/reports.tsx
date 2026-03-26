@@ -12,6 +12,7 @@ import { fetchReportsBootstrap } from '../../lib/summaries';
 import { fmt, monthLabel, monthKey } from '../../constants/defaults';
 import type { TransportOwner, Vehicle, Route } from '../../types';
 import { useAppStore } from '../../store/useAppStore';
+import UnifiedHeader from '../../components/UnifiedHeader';
 
 function prevMonth(m: string): string {
   const [y, mm] = m.split('-').map(Number);
@@ -159,19 +160,7 @@ export default function ReportsScreen() {
         contentContainerStyle={{ paddingBottom: 34 }}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { void refetchBootstrap(); if (selOwner) void refetchVehicles(); }} tintColor="#d9468f" />}
       >
-        <View style={{ paddingHorizontal: 16, paddingTop: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-          <View style={{ width: 34, height: 34, borderRadius: 17, backgroundColor: '#ffffff', borderWidth: 1, borderColor: '#f2d7e6', alignItems: 'center', justifyContent: 'center' }}>
-            <Text style={{ fontSize: 16 }}>👨🏽</Text>
-          </View>
-          <View style={{ flexDirection: 'row', gap: 10 }}>
-            <Pressable onPress={() => router.push('/(tabs)/entry')} style={({ pressed }) => ({ width: 34, height: 34, borderRadius: 17, backgroundColor: '#ffffff', borderWidth: 1, borderColor: '#f2d7e6', alignItems: 'center', justifyContent: 'center', transform: [{ scale: pressed ? 0.96 : 1 }] })}>
-              <Ionicons name="add" size={18} color="#111111" />
-            </Pressable>
-            <Pressable onPress={() => router.push('/(tabs)/reports')} style={({ pressed }) => ({ width: 34, height: 34, borderRadius: 17, backgroundColor: '#ffffff', borderWidth: 1, borderColor: '#f2d7e6', alignItems: 'center', justifyContent: 'center', transform: [{ scale: pressed ? 0.96 : 1 }] })}>
-              <Ionicons name="chatbubble-ellipses-outline" size={16} color="#111111" />
-            </Pressable>
-          </View>
-        </View>
+        <UnifiedHeader />
 
         <View style={{ padding: 16, paddingTop: 8 }}>
           <Text style={{ color: '#111111', fontSize: 26, fontWeight: '800' }}>Reports & Export</Text>

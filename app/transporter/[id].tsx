@@ -11,11 +11,14 @@ import ThemedConfirmModal from '../../components/ThemedConfirmModal';
 import ThemedDateField from '../../components/ThemedDateField';
 import { SkeletonBlock, SkeletonCard } from '../../components/Skeleton';
 import { useThemedNotice } from '../../components/ThemedNoticeProvider';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   getTransportOwner, getVehicles, getTransportIncome, getTotalPayments,
   getPayments, upsertTransportIncome, addPayment, deletePayment, upsertVehicle, deleteVehicle,
   getTripEntries, getDieselLogs, getGSTEntries, getOtherDeductions, getVehiclePayments,
+  searchVehiclesByRegNumber,
 } from '../../lib/queries';
+import type { VehicleSearchResult } from '../../lib/queries';
 import { calculateSettlement } from '../../lib/calculations';
 import { fmt, fmtDate, monthKey, monthLabel, round2 } from '../../constants/defaults';
 import type { TransportOwner, Vehicle, Payment, TransportIncome } from '../../types';
@@ -41,34 +44,6 @@ interface TransporterData {
   refresh: () => void;
 }
 
-interface TransporterScreenCacheEntry {
-  owner: TransportOwner;
-  vehicles: Vehicle[];
-  income: TransportIncome | null;
-  totalPaid: number;
-  payments: Payment[];
-  at: number;
-}
-
-const TRANSPORTER_SCREEN_CACHE_TTL_MS = 60_000;
-const transporterScreenCache = new Map<string, TransporterScreenCacheEntry>();
-
-function transporterCacheKey(id: string | undefined, month: string): string {
-  return `${id ?? 'none'}|${month}`;
-}
-
-function invalidateTransporterScreenCache(id?: string, month?: string) {
-  if (!id && !month) {
-    transporterScreenCache.clear();
-    return;
-  }
-  for (const key of transporterScreenCache.keys()) {
-    const [cachedId, cachedMonth] = key.split('|');
-    if (id && cachedId !== id) continue;
-    if (month && cachedMonth !== month) continue;
-    transporterScreenCache.delete(key);
-  }
-}
 
 // Modal state managed via useReducer
 type ModalState = {
@@ -116,82 +91,58 @@ function modalReducer(state: ModalState, action: ModalAction): ModalState {
 // ─── Custom Hook: useTransporterData ─────────────────────────────────────────
 
 function useTransporterData(id: string | undefined, month: string): TransporterData {
-  const [owner, setOwner]         = useState<TransportOwner | null>(null);
-  const [vehicles, setVehicles]   = useState<Vehicle[]>([]);
-  const [income, setIncome]       = useState<TransportIncome | null>(null);
-  const [payments, setPayments]   = useState<Payment[]>([]);
-  const [totalPaid, setTotalPaid] = useState(0);
-  const [loading, setLoading]     = useState(true);
-  const [refreshing, setRefreshing]   = useState(false);
+  const queryClient = useQueryClient();
 
-  const requestSeqRef      = useRef(0);
-  const notice = useThemedNotice();
-  const cacheKey = useMemo(() => transporterCacheKey(id, month), [id, month]);
+  const ownerQ = useQuery({
+    queryKey: ['transportOwner', id],
+    queryFn: () => getTransportOwner(id!),
+    enabled: !!id,
+  });
 
-  useEffect(() => {
-    const cached = transporterScreenCache.get(cacheKey);
-    if (!cached) return;
-    setOwner(cached.owner);
-    setVehicles(cached.vehicles);
-    setIncome(cached.income);
-    setTotalPaid(cached.totalPaid);
-    setPayments(cached.payments);
-    setLoading(false);
-  }, [cacheKey]);
+  const vehiclesQ = useQuery({
+    queryKey: ['vehicles', id],
+    queryFn: () => getVehicles(id!),
+    enabled: !!id,
+  });
 
-  const load = useCallback(async (force = false) => {
-    if (!id) return;
-    const seq = ++requestSeqRef.current;
-    const now = Date.now();
-    if (force) setRefreshing(true);
+  const incomeQ = useQuery({
+    queryKey: ['transportIncome', id, month],
+    queryFn: () => getTransportIncome(id!, month),
+    enabled: !!id,
+  });
 
-    const cached = transporterScreenCache.get(cacheKey);
-    if (!force && cached && now - cached.at < TRANSPORTER_SCREEN_CACHE_TTL_MS) {
-      setRefreshing(false);
-      setLoading(false);
-      return;
-    }
-    try {
-      const [o, v, inc, paid, pmts] = await Promise.all([
-        getTransportOwner(id), getVehicles(id),
-        getTransportIncome(id, month), getTotalPayments(id, month), getPayments(id, month),
-      ]);
-      if (seq !== requestSeqRef.current) return;
+  const totalPaidQ = useQuery({
+    queryKey: ['totalPayments', id, month],
+    queryFn: () => getTotalPayments(id!, month),
+    enabled: !!id,
+  });
 
-      if (o) {
-        transporterScreenCache.set(cacheKey, {
-          owner: o,
-          vehicles: v,
-          income: inc,
-          totalPaid: paid,
-          payments: pmts,
-          at: Date.now(),
-        });
-      }
+  const paymentsQ = useQuery({
+    queryKey: ['payments', id, month],
+    queryFn: () => getPayments(id!, month),
+    enabled: !!id,
+  });
 
-      setOwner(o); setVehicles(v); setIncome(inc); setTotalPaid(paid); setPayments(pmts);
-    } catch (e) {
-      if (seq !== requestSeqRef.current) return;
-      notice.showError('Error', String(e));
-    } finally {
-      if (seq === requestSeqRef.current) {
-        setLoading(false);
-        setRefreshing(false);
-      }
-    }
-  }, [id, month, cacheKey, notice]);
+  const loading = ownerQ.isLoading || vehiclesQ.isLoading || incomeQ.isLoading || totalPaidQ.isLoading || paymentsQ.isLoading;
+  const refreshing = ownerQ.isFetching || vehiclesQ.isFetching || incomeQ.isFetching || totalPaidQ.isFetching || paymentsQ.isFetching;
 
-  const refresh = useCallback(() => {
-    setRefreshing(true);
-    load(true);
-  }, [load]);
+  const refresh = useCallback(async () => {
+    await Promise.all([
+      ownerQ.refetch(), vehiclesQ.refetch(), incomeQ.refetch(), totalPaidQ.refetch(), paymentsQ.refetch()
+    ]);
+  }, [ownerQ, vehiclesQ, incomeQ, totalPaidQ, paymentsQ]);
 
-  useFocusEffect(useCallback(() => {
-    if (!transporterScreenCache.has(cacheKey)) setLoading(true);
-    load(false);
-  }, [load, cacheKey]));
-
-  return { owner, vehicles, income, totalPaid, payments, loading, refreshing, load, refresh };
+  return {
+    owner: ownerQ.data ?? null,
+    vehicles: vehiclesQ.data ?? [],
+    income: incomeQ.data ?? null,
+    totalPaid: totalPaidQ.data ?? 0,
+    payments: paymentsQ.data ?? [],
+    loading,
+    refreshing,
+    load: () => refresh(),
+    refresh
+  };
 }
 
 // ─── Main Screen ─────────────────────────────────────────────────────────────
@@ -213,8 +164,8 @@ export default function TransporterDetailScreen() {
   const vehicleSwipeRefs = useRef<Record<string, Swipeable | null>>({});
   const paymentSwipeRefs = useRef<Record<string, Swipeable | null>>({});
 
+  const queryClient = useQueryClient();
   const notice = useThemedNotice();
-
   const { owner, vehicles, income, totalPaid, payments, loading, refreshing, load, refresh } =
     useTransporterData(id, month);
 
@@ -224,6 +175,8 @@ export default function TransporterDetailScreen() {
     [income?.transport_payment, income?.diesel_payment],
   );
   const balance = useMemo(() => round2(totalIncome - totalPaid), [totalIncome, totalPaid]);
+  // Set of vehicle IDs belonging to this owner — used by PaymentCard to detect cross-owner payments
+  const ownerVehicleIds = useMemo(() => new Set(vehicles.map(v => v.id)), [vehicles]);
 
   // Month navigation
   useEffect(() => {
@@ -246,25 +199,24 @@ export default function TransporterDetailScreen() {
   const handleCloseIncome = useCallback(() => dispatchModal({ type: 'CLOSE_INCOME' }), []);
   const handleIncomeSaved = useCallback(() => {
     dispatchModal({ type: 'CLOSE_INCOME' });
-    invalidateTransporterScreenCache(id, month);
-    load(true);
-  }, [id, month, load]);
+    void queryClient.invalidateQueries({ queryKey: ['transportIncome', id, month] });
+    void queryClient.invalidateQueries({ queryKey: ['homeSummary', month] });
+  }, [id, month, queryClient]);
 
   const handleOpenPayment  = useCallback(() => dispatchModal({ type: 'OPEN_PAYMENT' }),  []);
   const handleClosePayment = useCallback(() => dispatchModal({ type: 'CLOSE_PAYMENT' }), []);
   const handlePaymentSaved = useCallback(() => {
     dispatchModal({ type: 'CLOSE_PAYMENT' });
-    invalidateTransporterScreenCache(id, month);
-    load(true);
-  }, [id, month, load]);
+    void queryClient.invalidateQueries({ queryKey: ['payments', id, month] });
+    void queryClient.invalidateQueries({ queryKey: ['totalPayments', id, month] });
+  }, [id, month, queryClient]);
 
   const handleOpenVehicle = useCallback((vehicle?: Vehicle) => dispatchModal({ type: 'OPEN_VEHICLE', vehicle }), []);
   const handleCloseVehicle = useCallback(() => dispatchModal({ type: 'CLOSE_VEHICLE' }), []);
   const handleVehicleSaved = useCallback(() => {
     dispatchModal({ type: 'CLOSE_VEHICLE' });
-    invalidateTransporterScreenCache(id, month);
-    load(true);
-  }, [id, month, load]);
+    void queryClient.invalidateQueries({ queryKey: ['vehicles', id] });
+  }, [id, queryClient]);
 
   const closeAllSwipes = useCallback((exceptVehicleId?: string, exceptPaymentId?: string) => {
     if (openVehicleSwipeId && openVehicleSwipeId !== exceptVehicleId) {
@@ -417,6 +369,7 @@ export default function TransporterDetailScreen() {
             key={p.id}
             payment={p}
             index={i}
+            ownerVehicleIds={ownerVehicleIds}
             swipeRef={(ref) => { paymentSwipeRefs.current[p.id] = ref; }}
             isOpen={openPaymentSwipeId === p.id}
             onWillOpen={() => {
@@ -457,6 +410,7 @@ export default function TransporterDetailScreen() {
           month={month}
           ownerCommissionRate={owner.commission_rate}
           ownerAccidentalRate={owner.accidental_rate}
+          maxAllowedAmount={balance}
           onClose={handleClosePayment}
           onSaved={handlePaymentSaved}
         />
@@ -490,8 +444,8 @@ export default function TransporterDetailScreen() {
           try {
             await deletePayment(modalState.paymentToDelete.id);
             dispatchModal({ type: 'SET_PAYMENT_TO_DELETE', payment: null });
-            invalidateTransporterScreenCache(id, month);
-            load(true);
+            void queryClient.invalidateQueries({ queryKey: ['payments', id, month] });
+            void queryClient.invalidateQueries({ queryKey: ['totalPayments', id, month] });
           } catch (e) {
             notice.showError('Error', String(e));
           }
@@ -516,8 +470,7 @@ export default function TransporterDetailScreen() {
             await deleteVehicle(modalState.vehicleToDelete.id);
             dispatchModal({ type: 'SET_VEHICLE_TO_DELETE', vehicle: null });
             notice.showSuccess('Deleted', 'Vehicle removed successfully.');
-            invalidateTransporterScreenCache(id, month);
-            load(true);
+            void queryClient.invalidateQueries({ queryKey: ['vehicles', id] });
           } catch (e) {
             notice.showError('Error', String(e));
           }
@@ -597,6 +550,8 @@ const VehicleCard = React.memo(function VehicleCard({
 interface PaymentCardProps {
   payment: Payment;
   index: number;
+  /** IDs of vehicles owned by the current transport owner — used to detect cross-owner payments. */
+  ownerVehicleIds: Set<string>;
   swipeRef: (ref: Swipeable | null) => void;
   isOpen: boolean;
   onWillOpen: () => void;
@@ -605,8 +560,9 @@ interface PaymentCardProps {
 }
 
 const PaymentCard = React.memo(function PaymentCard({
-  payment: p, index, swipeRef, onWillOpen, onClose, onDelete,
+  payment: p, index, ownerVehicleIds, swipeRef, onWillOpen, onClose, onDelete,
 }: PaymentCardProps) {
+  const isCrossOwner = !!p.vehicle_id && !ownerVehicleIds.has(p.vehicle_id);
   return (
     <Swipeable
       ref={swipeRef}
@@ -641,6 +597,12 @@ const PaymentCard = React.memo(function PaymentCard({
             {p.reference ? ` #${p.reference}` : ''}
             {p.note ? ` · ${p.note}` : ''}
           </Text>
+          {isCrossOwner && (
+            <View style={styles.crossOwnerTag}>
+              <Ionicons name="link-outline" size={10} color="#ec4899" />
+              <Text style={styles.crossOwnerTagText}>Cross-owner vehicle</Text>
+            </View>
+          )}
         </View>
         <View style={{ alignItems: 'flex-end', marginLeft: 8 }}>
           <Text style={styles.paymentAmount}>{fmt(p.amount)}</Text>
@@ -699,24 +661,40 @@ function IncomeModal({ visible, income, transportOwnerId, month, onClose, onSave
     setDp(income?.diesel_payment?.toString() ?? '');
   }, [visible, income]);
 
+  const queryClient = useQueryClient();
   const save = useCallback(async () => {
     const t = parseFloat(tp), d = parseFloat(dp);
     if (isNaN(t) || isNaN(d)) { notice.showInfo('Invalid', 'Enter valid amounts'); return; }
     setSaving(true);
     try {
       await upsertTransportIncome({ transport_owner_id: transportOwnerId, month, transport_payment: t, diesel_payment: d });
+      void queryClient.invalidateQueries({ queryKey: ['transportIncome', transportOwnerId, month] });
+      void queryClient.invalidateQueries({ queryKey: ['homeSummary', month] });
+      void queryClient.invalidateQueries({ queryKey: ['transportersSummary', month] });
       onSaved();
     } catch (e) {
       notice.showError('Error', String(e));
     } finally {
       setSaving(false);
     }
-  }, [tp, dp, transportOwnerId, month, onSaved, notice]);
+  }, [tp, dp, transportOwnerId, month, onSaved, notice, queryClient]);
+
+  const [debouncedTp, setDebouncedTp] = useState(tp);
+  const [debouncedDp, setDebouncedDp] = useState(dp);
+
+  // Debounce for calculation
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      setDebouncedTp(tp);
+      setDebouncedDp(dp);
+    }, 150);
+    return () => clearTimeout(handler);
+  }, [tp, dp]);
 
   const previewTotal = useMemo(() => {
-    const t = parseFloat(tp), d = parseFloat(dp);
+    const t = parseFloat(debouncedTp), d = parseFloat(debouncedDp);
     return !isNaN(t) && !isNaN(d) ? round2(t + d) : null;
-  }, [tp, dp]);
+  }, [debouncedTp, debouncedDp]);
 
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
@@ -745,13 +723,14 @@ interface PaymentModalProps {
   month: string;
   ownerCommissionRate: number;
   ownerAccidentalRate: number;
+  maxAllowedAmount: number;
   onClose: () => void;
   onSaved: () => void;
 }
 
 function PaymentModal({
   visible, transportOwnerId, vehicles, month,
-  ownerCommissionRate, ownerAccidentalRate, onClose, onSaved,
+  ownerCommissionRate, ownerAccidentalRate, maxAllowedAmount, onClose, onSaved,
 }: PaymentModalProps) {
   const [paidTo, setPaidTo]   = useState('');
   const [amount, setAmount]   = useState('');
@@ -759,23 +738,33 @@ function PaymentModal({
   const [mode, setMode]       = useState<'cheque' | 'upi' | 'other'>('cheque');
   const [ref, setRef]         = useState('');
   const [note, setNote]       = useState('');
-  const [vehicleId, setVehicleId] = useState<string | null>(null);
+  const [vehicleId, setVehicleId]               = useState<string | null>(null);
   const [vehicleNetPayable, setVehicleNetPayable] = useState<number | null>(null);
   const [loadingVehicleNet, setLoadingVehicleNet] = useState(false);
   const [saving, setSaving]   = useState(false);
+
+  // ── Cross-owner vehicle search state ──
+  const [vehicleTab, setVehicleTab]               = useState<'own' | 'other'>('own');
+  const [crossOwnerVehicle, setCrossOwnerVehicle] = useState<VehicleSearchResult | null>(null);
+  const [searchQuery, setSearchQuery]             = useState('');
+  const [searchResults, setSearchResults]         = useState<VehicleSearchResult[]>([]);
+  const [isSearching, setIsSearching]             = useState(false);
+  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const notice = useThemedNotice();
 
+  // ── Load net payable for any selected vehicle (own OR cross-owner) ──
   useEffect(() => {
-    if (!visible) return;
-    if (!vehicleId) { setVehicleNetPayable(null); return; }
-
+    if (!visible || !vehicleId) { setVehicleNetPayable(null); return; }
     let cancelled = false;
     const loadVehicleNetPayable = async () => {
       setLoadingVehicleNet(true);
       try {
-        const selectedVehicle = vehicles.find((v) => v.id === vehicleId);
-        const effectiveCommissionRate = Number(selectedVehicle?.commission_rate ?? ownerCommissionRate ?? 0);
-        const effectiveAccidentalRate = Number(selectedVehicle?.accidental_rate ?? ownerAccidentalRate ?? 0);
+        // Use the selected vehicle's own rates (accurate for cross-owner vehicles)
+        const ownVehicle    = vehicles.find(v => v.id === vehicleId);
+        const effectiveVeh  = ownVehicle ?? crossOwnerVehicle;
+        const effectiveCommissionRate = Number(effectiveVeh?.commission_rate ?? ownerCommissionRate ?? 0);
+        const effectiveAccidentalRate = Number(effectiveVeh?.accidental_rate ?? ownerAccidentalRate ?? 0);
         const [trips, diesel, gst, others, paid] = await Promise.all([
           getTripEntries(vehicleId, month),
           getDieselLogs(vehicleId, month),
@@ -805,15 +794,19 @@ function PaymentModal({
         if (!cancelled) setLoadingVehicleNet(false);
       }
     };
-
     void loadVehicleNetPayable();
     return () => { cancelled = true; };
-  }, [visible, vehicleId, month, ownerCommissionRate, ownerAccidentalRate, notice, vehicles]);
+  }, [visible, vehicleId, month, ownerCommissionRate, ownerAccidentalRate, notice, vehicles, crossOwnerVehicle]);
 
+  const queryClient = useQueryClient();
   const save = useCallback(async () => {
     if (!paidTo.trim()) { notice.showInfo('Required', 'Enter payee name'); return; }
     const amt = parseFloat(amount);
     if (isNaN(amt) || amt <= 0) { notice.showInfo('Invalid', 'Enter valid amount'); return; }
+    if (amt > maxAllowedAmount) {
+      notice.showError('Overpayment Not Allowed', `Remaining balance for ${monthLabel(month)} is ${fmt(maxAllowedAmount)}. You cannot pay more than this.`);
+      return;
+    }
     if (mode === 'cheque' && !ref.trim()) { notice.showInfo('Required', 'Cheque reference is required'); return; }
     setSaving(true);
     try {
@@ -828,7 +821,13 @@ function PaymentModal({
         note: note.trim() || null,
         month,
       });
-      setPaidTo(''); setAmount(''); setRef(''); setNote(''); setVehicleId(null);
+      void queryClient.invalidateQueries({ queryKey: ['payments', transportOwnerId, month] });
+      void queryClient.invalidateQueries({ queryKey: ['totalPayments', transportOwnerId, month] });
+      void queryClient.invalidateQueries({ queryKey: ['transportersSummary', month] });
+      setPaidTo(''); setAmount(''); setRef(''); setNote('');
+      setVehicleId(null); setCrossOwnerVehicle(null);
+      setSearchQuery(''); setSearchResults([]);
+      setVehicleTab('own');
       onSaved();
       notice.showSuccess('Saved', 'Payment added successfully.');
     } catch (e) {
@@ -836,9 +835,55 @@ function PaymentModal({
     } finally {
       setSaving(false);
     }
-  }, [paidTo, amount, mode, ref, note, transportOwnerId, vehicleId, date, month, onSaved, notice]);
+  }, [paidTo, amount, mode, ref, note, transportOwnerId, vehicleId, date, month, maxAllowedAmount, onSaved, notice, queryClient]);
 
-  const clearVehicle = useCallback(() => { setVehicleId(null); setVehicleNetPayable(null); }, []);
+  /** Clear vehicle selection, resetting all related state */
+  const clearVehicle = useCallback(() => {
+    setVehicleId(null);
+    setVehicleNetPayable(null);
+    setCrossOwnerVehicle(null);
+    setSearchQuery('');
+    setSearchResults([]);
+  }, []);
+
+  /** Switch tabs — always clears the current vehicle selection */
+  const switchTab = useCallback((tab: 'own' | 'other') => {
+    setVehicleTab(tab);
+    setVehicleId(null);
+    setVehicleNetPayable(null);
+    setCrossOwnerVehicle(null);
+    setSearchQuery('');
+    setSearchResults([]);
+  }, []);
+
+  /** Debounced cross-owner vehicle search */
+  const handleSearchChange = useCallback((q: string) => {
+    setSearchQuery(q);
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    if (q.trim().length < 2) { setSearchResults([]); setIsSearching(false); return; }
+    setIsSearching(true);
+    searchTimerRef.current = setTimeout(async () => {
+      try {
+        const results = await searchVehiclesByRegNumber(q.trim());
+        // Exclude vehicles that already belong to the current owner
+        setSearchResults(results.filter(r => !vehicles.some(v => v.id === r.id)));
+      } catch {
+        setSearchResults([]);
+      } finally {
+        setIsSearching(false);
+      }
+    }, 400);
+  }, [vehicles]);
+
+  /** Select a cross-owner vehicle from search results */
+  const selectCrossOwner = useCallback((v: VehicleSearchResult) => {
+    setVehicleId(v.id);
+    setCrossOwnerVehicle(v);
+    setSearchQuery(v.reg_number);
+    setSearchResults([]);
+    // Auto-fill payee name if still empty
+    setPaidTo(prev => prev.trim() ? prev : v.owner_name);
+  }, []);
 
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
@@ -866,40 +911,146 @@ function PaymentModal({
           />
           <MF label="Note (optional)" value={note} onChange={setNote} placeholder="e.g. cash, tfs, card" />
 
+          {/* ── Vehicle Picker ── */}
           <Text style={styles.fieldLabel}>Link to Vehicle (optional)</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 16 }}>
-            <TouchableOpacity
-              onPress={clearVehicle}
-              style={[styles.vehicleChip, !vehicleId && styles.vehicleChipActive]}
-            >
-              <Text style={[styles.vehicleChipText, !vehicleId && styles.vehicleChipTextActive]}>None</Text>
-            </TouchableOpacity>
-            {vehicles.map((v) => (
-              <TouchableOpacity
-                key={v.id}
-                onPress={() => setVehicleId(v.id)}
-                style={[styles.vehicleChip, vehicleId === v.id && styles.vehicleChipActive]}
-              >
-                <Text style={[styles.vehicleChipText, vehicleId === v.id && styles.vehicleChipTextActive]}>
-                  {v.reg_number}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
 
+          {/* Tab switcher */}
+          <View style={styles.vehicleTabRow}>
+            <TouchableOpacity
+              onPress={() => switchTab('own')}
+              style={[styles.vehicleTabBtn, vehicleTab === 'own' && styles.vehicleTabBtnActive]}
+            >
+              <Text style={[styles.vehicleTabText, vehicleTab === 'own' && styles.vehicleTabTextActive]}>
+                Own ({vehicles.length})
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => switchTab('other')}
+              style={[styles.vehicleTabBtn, vehicleTab === 'other' && styles.vehicleTabBtnActive]}
+            >
+              <Text style={[styles.vehicleTabText, vehicleTab === 'other' && styles.vehicleTabTextActive]}>
+                🔗 Other Owner
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Own vehicles — horizontal chip scroll */}
+          {vehicleTab === 'own' ? (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 16 }}>
+              <TouchableOpacity
+                onPress={clearVehicle}
+                style={[styles.vehicleChip, !vehicleId && styles.vehicleChipActive]}
+              >
+                <Text style={[styles.vehicleChipText, !vehicleId && styles.vehicleChipTextActive]}>None</Text>
+              </TouchableOpacity>
+              {vehicles.map(v => (
+                <TouchableOpacity
+                  key={v.id}
+                  onPress={() => { setVehicleId(v.id); setCrossOwnerVehicle(null); }}
+                  style={[styles.vehicleChip, vehicleId === v.id && styles.vehicleChipActive]}
+                >
+                  <Text style={[styles.vehicleChipText, vehicleId === v.id && styles.vehicleChipTextActive]}>
+                    {v.reg_number}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          ) : (
+            /* Cross-owner vehicle search */
+            <View style={{ marginBottom: 16 }}>
+              <SearchInput
+                style={styles.crossOwnerSearchInput}
+                value={searchQuery}
+                onChangeText={handleSearchChange}
+                placeholder="Type reg. no. e.g. MH12AB1234"
+                placeholderTextColor="#9f8b97"
+              />
+
+              {isSearching && (
+                <Text style={styles.crossOwnerHint}>Searching…</Text>
+              )}
+
+              {!isSearching && searchQuery.trim().length >= 2 && searchResults.length === 0 && (
+                <Text style={styles.crossOwnerHint}>No vehicles found for "{searchQuery}"</Text>
+              )}
+
+              {searchResults.length > 0 && (
+                <View style={styles.searchResultsList}>
+                  {searchResults.map(r => (
+                    <TouchableOpacity
+                      key={r.id}
+                      onPress={() => selectCrossOwner(r)}
+                      style={[
+                        styles.searchResultItem,
+                        vehicleId === r.id && styles.searchResultItemActive,
+                      ]}
+                    >
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.searchResultReg}>{r.reg_number}</Text>
+                        <Text style={styles.searchResultSub}>{r.owner_name} · {r.transporter_name}</Text>
+                      </View>
+                      {vehicleId === r.id && (
+                        <Ionicons name="checkmark-circle" size={18} color="#ec4899" />
+                      )}
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              )}
+
+              {crossOwnerVehicle && vehicleId && (
+                <View style={styles.crossOwnerSelectedBadge}>
+                  <Ionicons name="link-outline" size={13} color="#d9468f" />
+                  <Text style={styles.crossOwnerSelectedText} numberOfLines={1}>
+                    {crossOwnerVehicle.reg_number} · {crossOwnerVehicle.transporter_name}
+                  </Text>
+                  <TouchableOpacity onPress={clearVehicle} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                    <Ionicons name="close-circle" size={16} color="#d9468f" />
+                  </TouchableOpacity>
+                </View>
+              )}
+            </View>
+          )}
+
+          {/* Net payable preview — shared for own and cross-owner vehicles */}
           {vehicleId && (
             <View style={styles.previewCard}>
-              <Text style={[styles.fieldLabel, { marginBottom: 0 }]}>Selected Vehicle Net Payable</Text>
-              <Text style={styles.vehicleNetAmount}>
-                {loadingVehicleNet ? 'Calculating...' : fmt(Math.abs(vehicleNetPayable ?? 0))}
+              <Text style={[styles.fieldLabel, { marginBottom: 0 }]}>
+                {crossOwnerVehicle
+                  ? `Net Payable · ${crossOwnerVehicle.reg_number} (${crossOwnerVehicle.transporter_name})`
+                  : 'Selected Vehicle Net Payable'}
               </Text>
-              {!loadingVehicleNet && typeof vehicleNetPayable === 'number' && (
-                <Text style={styles.vehicleNetHint}>
-                  {vehicleNetPayable <= 0
-                    ? 'No outstanding payable. You can still enter any custom amount.'
-                    : 'Amount field prefilled from net payable. You can edit it.'}
-                </Text>
-              )}
+
+              {loadingVehicleNet ? (
+                <Text style={styles.vehicleNetAmount}>Calculating...</Text>
+              ) : typeof vehicleNetPayable === 'number' ? (
+                vehicleNetPayable > 0 ? (
+                  // Outstanding amount — pre-fill the amount field
+                  <>
+                    <Text style={styles.vehicleNetAmount}>{fmt(vehicleNetPayable)}</Text>
+                    <Text style={styles.vehicleNetHint}>
+                      Amount field prefilled from net payable. You can edit it.
+                    </Text>
+                  </>
+                ) : vehicleNetPayable < 0 ? (
+                  // Already overpaid — warn clearly, do NOT pre-fill amount
+                  <>
+                    <Text style={[styles.vehicleNetAmount, { color: '#f59e0b' }]}>
+                      OVERPAID  {fmt(Math.abs(vehicleNetPayable))}
+                    </Text>
+                    <Text style={styles.vehicleNetHint}>
+                      This vehicle has been overpaid this month. Enter a custom amount only if intentional.
+                    </Text>
+                  </>
+                ) : (
+                  // Exactly fully paid
+                  <>
+                    <Text style={[styles.vehicleNetAmount, { color: '#22c55e' }]}>✓ Fully Paid</Text>
+                    <Text style={styles.vehicleNetHint}>
+                      No outstanding balance. You can still enter a custom amount if needed.
+                    </Text>
+                  </>
+                )
+              ) : null}
             </View>
           )}
 
@@ -1021,19 +1172,53 @@ interface MFProps {
   kb?: string;
 }
 function MF({ label, value, onChange, placeholder, kb = 'default' }: MFProps) {
+  const [local, setLocal] = useState(value || '');
+  useEffect(() => { if (value !== local) setLocal(value || ''); }, [value]);
+
+  const hChange = (t: string) => {
+    setLocal(t);
+    onChange(t);
+  };
+
   return (
     <View style={{ marginBottom: 16 }}>
       <Text style={styles.fieldLabel}>{label}</Text>
       <TextInput
         style={styles.textInput}
-        value={value}
-        onChangeText={onChange}
+        value={local}
+        onChangeText={hChange}
         placeholder={placeholder}
-        placeholderTextColor="#475569"
+        placeholderTextColor="#9f8b97"
         keyboardType={kb as any}
         autoCapitalize="none"
+        autoCorrect={false}
+        spellCheck={false}
       />
     </View>
+  );
+}
+
+function SearchInput({ value, onChangeText, placeholder, placeholderTextColor, style }: { value: string; onChangeText: (t: string) => void; placeholder: string; placeholderTextColor: string; style: any }) {
+  const [local, setLocal] = useState(value || '');
+  useEffect(() => { if (value !== local) setLocal(value || ''); }, [value]);
+
+  const hChange = (t: string) => {
+    setLocal(t);
+    onChangeText(t);
+  };
+
+  return (
+    <TextInput
+      style={style}
+      value={local}
+      onChangeText={hChange}
+      placeholder={placeholder}
+      placeholderTextColor={placeholderTextColor}
+      autoCapitalize="characters"
+      autoCorrect={false}
+      spellCheck={false}
+      returnKeyType="search"
+    />
   );
 }
 
@@ -1164,4 +1349,28 @@ const styles = StyleSheet.create({
   saveBtn:        { backgroundColor: '#ec4899', borderRadius: 14, padding: 16, alignItems: 'center', marginTop: 8 },
   saveBtnDisabled:{ backgroundColor: '#d4d4d8' },
   saveBtnText:    { color: 'white', fontWeight: 'bold', fontSize: 16 },
+
+  // Cross-owner vehicle payment — vehicle tab picker (matches modeToggle style)
+  vehicleTabRow:      { flexDirection: 'row', backgroundColor: '#ffffffcc', borderColor: '#f2d7e6', borderWidth: 1, borderRadius: 12, padding: 4, marginBottom: 12 },
+  vehicleTabBtn:      { flex: 1, paddingVertical: 10, borderRadius: 10, alignItems: 'center' },
+  vehicleTabBtnActive:{ backgroundColor: '#ec4899' },
+  vehicleTabText:     { color: '#6b5c67', fontWeight: '600', fontSize: 13 },
+  vehicleTabTextActive:{ color: 'white' },
+
+  // Cross-owner search input + results
+  crossOwnerSearchInput: { backgroundColor: '#ffffff', borderColor: '#f2d7e6', borderWidth: 1, color: '#111111', borderRadius: 12, padding: 14, marginBottom: 8 },
+  crossOwnerHint:    { color: '#8d7a86', fontSize: 12, marginBottom: 8, paddingHorizontal: 2 },
+  searchResultsList: { backgroundColor: '#ffffffcc', borderColor: '#f2d7e6', borderWidth: 1, borderRadius: 12, overflow: 'hidden', marginBottom: 8 },
+  searchResultItem:  { flexDirection: 'row', alignItems: 'center', padding: 12, borderBottomWidth: 1, borderBottomColor: '#fde7f3' },
+  searchResultItemActive: { backgroundColor: '#fce7f3' },
+  searchResultReg:   { color: '#111111', fontWeight: '700', fontSize: 14 },
+  searchResultSub:   { color: '#6b5c67', fontSize: 11, marginTop: 2 },
+
+  // Selected cross-owner badge (inside search tab)
+  crossOwnerSelectedBadge: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#fce7f3', borderColor: '#f2d7e6', borderWidth: 1, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 8 },
+  crossOwnerSelectedText:  { flex: 1, color: '#be185d', fontWeight: '600', fontSize: 12 },
+
+  // Cross-owner tag on PaymentCard
+  crossOwnerTag:     { flexDirection: 'row', alignItems: 'center', gap: 3, marginTop: 4 },
+  crossOwnerTagText: { color: '#ec4899', fontSize: 10, fontWeight: '700' },
 });

@@ -7,6 +7,7 @@ import { AppDataProvider } from '../components/AppDataProvider';
 import { OfflineQueueManager } from '../components/OfflineQueueManager';
 import { OfflineQueueNoticeBridge } from '../components/OfflineQueueNoticeBridge';
 import { ErrorBoundary } from '../components/ErrorBoundary';
+import { AuthProvider } from '../components/AuthProvider';
 import '../global.css';
 
 export default function RootLayout() {
@@ -16,10 +17,12 @@ export default function RootLayout() {
       <SafeAreaProvider>
         <ThemedNoticeProvider>
           <AppDataProvider>
-            <OfflineQueueManager />
-            <OfflineQueueNoticeBridge />
-            <StatusBar style="dark" />
-            <Stack screenOptions={{ headerShown: false }} />
+            <AuthProvider>
+              <OfflineQueueManager />
+              <OfflineQueueNoticeBridge />
+              <StatusBar style="dark" />
+              <Stack screenOptions={{ headerShown: false }} />
+            </AuthProvider>
           </AppDataProvider>
         </ThemedNoticeProvider>
       </SafeAreaProvider>

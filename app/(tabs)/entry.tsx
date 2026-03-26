@@ -16,6 +16,7 @@ import { monthKey, monthLabel, round2, prevMonth, nextMonth } from '../../consta
 import type { TransportOwner, Vehicle, Route, GlobalSettings } from '../../types';
 import { useAppStore } from '../../store/useAppStore';
 import { ThemedTextInput } from '../../components/ThemedTextInput';
+import UnifiedHeader from '../../components/UnifiedHeader';
 
 export default function EntryScreen() {
   const [tab, setTab] = useState<'diesel' | 'trip' | 'challan'>('diesel');
@@ -91,19 +92,7 @@ export default function EntryScreen() {
       <View style={styles.bgCircle1} />
       <View style={styles.bgCircle2} />
 
-      <View style={styles.headerRow}>
-        <View style={styles.avatarContainer}>
-          <Text style={styles.avatarEmoji}>👨🏽</Text>
-        </View>
-        <View style={styles.topActions}>
-          <Pressable onPress={() => router.push('/(tabs)/entry')} style={({ pressed }) => [styles.iconButton, { transform: [{ scale: pressed ? 0.96 : 1 }] }]}>
-            <Ionicons name="add" size={18} color={Theme.colors.light.text} />
-          </Pressable>
-          <Pressable onPress={() => router.push('/(tabs)/reports')} style={({ pressed }) => [styles.iconButton, { transform: [{ scale: pressed ? 0.96 : 1 }] }]}>
-            <Ionicons name="chatbubble-ellipses-outline" size={16} color={Theme.colors.light.text} />
-          </Pressable>
-        </View>
-      </View>
+      <UnifiedHeader />
 
       <View style={styles.titleSection}>
         <Text style={styles.title}>Quick Entry</Text>
@@ -209,6 +198,47 @@ export default function EntryScreen() {
                 <Ionicons name="chevron-forward" size={16} color={Theme.colors.light.muted} />
               </TouchableOpacity>
             )}
+
+            {tab === 'trip' && (
+              <TouchableOpacity
+                onPress={() => router.push({ pathname: '/trip-history' as any, params: { vehicleId: selVehicle?.id ?? '', month: monthKey(), ownerId: selOwner.id } })}
+                style={styles.fullScreenLink}
+              >
+                <View style={styles.fullScreenLinkContent}>
+                  <View style={styles.fullScreenLinkIcon}>
+                    <Ionicons name="time-outline" size={14} color={Theme.colors.light.text} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.fullScreenLinkTitle} numberOfLines={1}>View Trip History</Text>
+                    <Text style={styles.fullScreenLinkSub} numberOfLines={1}>Edit or delete existing trip entries</Text>
+                  </View>
+                </View>
+                <Ionicons name="chevron-forward" size={16} color={Theme.colors.light.muted} />
+              </TouchableOpacity>
+            )}
+
+            {tab === 'challan' && (
+              <TouchableOpacity
+                onPress={() =>
+                  router.push({
+                    pathname: '/challan-logs',
+                    params: { vehicleId: selVehicle?.id ?? '', month: monthKey() },
+                  } as never)
+                }
+                style={styles.fullScreenLink}
+              >
+                <View style={styles.fullScreenLinkContent}>
+                  <View style={styles.fullScreenLinkIcon}>
+                    <Ionicons name="list-outline" size={14} color={Theme.colors.light.text} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.fullScreenLinkTitle} numberOfLines={1}>View Challan Logs</Text>
+                    <Text style={styles.fullScreenLinkSub} numberOfLines={1}>Browse and manage all challan entries</Text>
+                  </View>
+                </View>
+                <Ionicons name="chevron-forward" size={16} color={Theme.colors.light.muted} />
+              </TouchableOpacity>
+            )}
           </>
         )}
 
@@ -228,40 +258,8 @@ export default function EntryScreen() {
             void queryClient.invalidateQueries({ queryKey: ['transportersSummary'] });
           }} />
         )}
-        {selOwner && tab === 'challan' && (
-          <>
-            {selVehicle ? (
-              <ChallanForm vehicle={selVehicle} currentMonth={monthKey()} />
-            ) : (
-              <View style={styles.formCard}>
-                <Text style={styles.formTitle}>
-                  🧾 Challan Logs — {selOwner.name}
-                </Text>
-                <Text style={styles.challanLogsPrompt}>
-                  Select a vehicle above to enter a new challan, or tap below to search and view all logs for this owner.
-                </Text>
-                <TouchableOpacity
-                  onPress={() =>
-                    router.push({
-                      pathname: '/challan-logs',
-                      params: { ownerId: selOwner.id, month: monthKey() },
-                    } as never)
-                  }
-                  style={styles.browseLink}
-                >
-                  <View>
-                    <Text style={styles.browseLinkTitle}>
-                      Browse All Challan Logs
-                    </Text>
-                    <Text style={styles.browseLinkSub}>
-                      View, edit, or delete existing entries for {selOwner.name}
-                    </Text>
-                  </View>
-                  <Ionicons name="chevron-forward" size={18} color={Theme.colors.light.secondary} />
-                </TouchableOpacity>
-              </View>
-            )}
-          </>
+        {selOwner && tab === 'challan' && selVehicle && (
+          <ChallanForm vehicle={selVehicle} currentMonth={monthKey()} />
         )}
 
         {!selOwner && (
@@ -298,7 +296,7 @@ const DieselForm = React.memo(function DieselForm({ vehicle, settings, onSaved }
   useEffect(() => {
     const handler = setTimeout(() => {
       setDebouncedLitres(litres);
-    }, 300);
+    }, 150);
     return () => clearTimeout(handler);
   }, [litres]);
 
@@ -361,9 +359,18 @@ const DieselForm = React.memo(function DieselForm({ vehicle, settings, onSaved }
 const TripForm = React.memo(function TripForm({ vehicle, routes, onSaved }: { vehicle: Vehicle; routes: Route[]; onSaved: () => void }) {
   const [selRoute, setSelRoute] = useState<Route | null>(null);
   const [tonnes, setTonnes]     = useState('');
+  const [debouncedTonnes, setDebouncedTonnes] = useState('');
   const [month, setMonth]       = useState(monthKey());
   const [saving, setSaving]     = useState(false);
   const notice = useThemedNotice();
+
+  // Debounce calculation to keep input responsive
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      setDebouncedTonnes(tonnes);
+    }, 150);
+    return () => clearTimeout(handler);
+  }, [tonnes]);
 
   const save = async () => {
     if (!selRoute) { notice.showInfo('Required', 'Select a route'); return; }
@@ -383,9 +390,9 @@ const TripForm = React.memo(function TripForm({ vehicle, routes, onSaved }: { ve
   };
 
   const earning = useMemo(() => {
-    const t = parseFloat(tonnes);
+    const t = parseFloat(debouncedTonnes);
     return (isNaN(t) || !selRoute) ? 0 : round2(t * selRoute.rate_per_tonne);
-  }, [tonnes, selRoute]);
+  }, [debouncedTonnes, selRoute]);
 
   return (
     <View style={styles.formCard}>
@@ -443,7 +450,7 @@ const TripForm = React.memo(function TripForm({ vehicle, routes, onSaved }: { ve
         keyboardType="decimal-pad" 
       />
 
-      {!!tonnes && selRoute && !isNaN(parseFloat(tonnes)) && (
+      {!!debouncedTonnes && selRoute && !isNaN(parseFloat(debouncedTonnes)) && (
         <View style={styles.calcPreview}>
           <Text style={styles.calcLabel}>Gross earning</Text>
           <Text style={styles.calcValue}>
@@ -458,22 +465,6 @@ const TripForm = React.memo(function TripForm({ vehicle, routes, onSaved }: { ve
         style={[styles.saveButton, saving && styles.buttonDisabled]}
       >
         <Text style={styles.saveButtonText}>{saving ? 'Saving...' : 'Save Trip Entry'}</Text>
-      </TouchableOpacity>
-
-      <TouchableOpacity
-        onPress={() => router.push({ pathname: '/trip-history' as any, params: { vehicleId: vehicle.id, month, ownerId: vehicle.transport_owner_id } })}
-        style={styles.fullScreenLink}
-      >
-        <View style={styles.fullScreenLinkContent}>
-          <View style={styles.fullScreenLinkIcon}>
-            <Ionicons name="time-outline" size={14} color={Theme.colors.light.text} />
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.fullScreenLinkTitle} numberOfLines={1}>View Trip History</Text>
-            <Text style={styles.fullScreenLinkSub} numberOfLines={1}>Edit or delete existing trip entries</Text>
-          </View>
-        </View>
-        <Ionicons name="chevron-forward" size={16} color={Theme.colors.light.muted} />
       </TouchableOpacity>
     </View>
   );
@@ -524,7 +515,7 @@ const ChallanForm = React.memo(function ChallanForm({ vehicle, currentMonth }: {
       if (!isNaN(g) && !isNaN(t) && g > t) {
         setNetKg(String(g - t));
       }
-    }, 300);
+    }, 150);
     return () => clearTimeout(handler);
   }, [grossKg, tareKg]);
 
@@ -576,6 +567,9 @@ const ChallanForm = React.memo(function ChallanForm({ vehicle, currentMonth }: {
         challan_no:      challanNo.trim() || null,
         vehicle_no:      vehicle.reg_number,
         tr_no:           workOrderNo.trim() || null,
+        transporter:     null,
+        destination:     null,
+        source:          null,
         gross_weight_kg: grossKg ? Number(grossKg) : null,
         tare_weight_kg:  tareKg  ? Number(tareKg)  : null,
         net_weight_kg:   Number(netKg),
@@ -682,26 +676,6 @@ const ChallanForm = React.memo(function ChallanForm({ vehicle, currentMonth }: {
         style={[styles.saveButton, saving && styles.buttonDisabled, { marginBottom: Theme.spacing.md }]}
       >
         <Text style={styles.saveButtonText}>{saving ? 'Saving...' : 'Save Challan'}</Text>
-      </TouchableOpacity>
-
-      <TouchableOpacity
-        onPress={() =>
-          router.push({
-            pathname: '/challan-logs',
-            params: { vehicleId: vehicle.id, month: currentMonth },
-          } as never)
-        }
-        style={styles.browseLink}
-      >
-        <View>
-          <Text style={styles.browseLinkTitle}>
-            View Challan Logs
-          </Text>
-          <Text style={styles.browseLinkSub}>
-            {(monthTotalKg / 1000).toFixed(3)} T this month · tap to browse & edit
-          </Text>
-        </View>
-        <Ionicons name="chevron-forward" size={18} color={Theme.colors.light.secondary} />
       </TouchableOpacity>
     </View>
   );

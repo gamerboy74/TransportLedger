@@ -77,6 +77,15 @@ export async function getVehiclesByOwnerIds(ownerIds: string[]): Promise<Vehicle
   return data ?? [];
 }
 
+export async function getAllVehicles(): Promise<Vehicle[]> {
+  const { data, error } = await supabase
+    .from('vehicles')
+    .select('id,transport_owner_id,reg_number,owner_name,owner_contact,commission_rate,accidental_rate,gst_commission_rate,created_at')
+    .order('reg_number');
+  if (error) throw error;
+  return data ?? [];
+}
+
 export async function getVehicle(id: string): Promise<Vehicle | null> {
   const { data, error } = await supabase
     .from('vehicles')
@@ -131,6 +140,39 @@ export async function deleteVehicle(id: string): Promise<void> {
 
   const { error: retryError } = await supabase.from('vehicles').delete().eq('id', id);
   if (retryError) throw retryError;
+}
+
+/** Vehicle search result — extends Vehicle with the transport owner's name for display. */
+export interface VehicleSearchResult extends Omit<Vehicle, 'created_at'> {
+  created_at: string;
+  transporter_name: string; // name of the transport_owner that owns this vehicle
+}
+
+/**
+ * Search all vehicles (across all owners) by reg number substring.
+ * Results include the owning transport owner's name for disambiguation.
+ * Excludes own-owner vehicles via caller-side filtering if needed.
+ */
+export async function searchVehiclesByRegNumber(query: string): Promise<VehicleSearchResult[]> {
+  if (!query.trim()) return [];
+  const { data, error } = await supabase
+    .from('vehicles')
+    .select('id,transport_owner_id,reg_number,owner_name,owner_contact,commission_rate,accidental_rate,gst_commission_rate,created_at,transport_owners(name)')
+    .ilike('reg_number', `%${query.trim()}%`)
+    .limit(12);
+  if (error) throw error;
+  return (data ?? []).map((v: any) => ({
+    id: v.id,
+    transport_owner_id: v.transport_owner_id,
+    reg_number: v.reg_number,
+    owner_name: v.owner_name,
+    owner_contact: v.owner_contact ?? null,
+    commission_rate: Number(v.commission_rate),
+    accidental_rate: Number(v.accidental_rate),
+    gst_commission_rate: Number(v.gst_commission_rate),
+    created_at: v.created_at,
+    transporter_name: (v.transport_owners as any)?.name ?? 'Unknown Owner',
+  }));
 }
 
 // ── Routes ───────────────────────────────────────────────────
@@ -294,6 +336,15 @@ export async function getDieselProfitsByVehicleIds(vehicleIds: string[], month: 
   return data ?? [];
 }
 
+export async function getAllDieselProfits(month: string): Promise<Array<{ vehicle_id: string; profit: number; deleted_at: string | null }>> {
+  const { data, error } = await supabase
+    .from('diesel_logs')
+    .select('vehicle_id,profit,deleted_at')
+    .eq('month', month);
+  if (error) throw error;
+  return data ?? [];
+}
+
 export async function getDieselLogsByVehicleIds(vehicleIds: string[], month: string, opts?: { page?: number; pageSize?: number }): Promise<DieselLog[]> {
   if (!vehicleIds.length) return [];
   let query = supabase
@@ -422,6 +473,15 @@ export async function getGSTCommissionsByVehicleIds(vehicleIds: string[], month:
   return data ?? [];
 }
 
+export async function getAllGSTCommissions(month: string): Promise<Array<{ vehicle_id: string; commission_on_gst: number }>> {
+  const { data, error } = await supabase
+    .from('gst_entries')
+    .select('vehicle_id,commission_on_gst')
+    .eq('belongs_to_month', month);
+  if (error) throw error;
+  return data ?? [];
+}
+
 export async function addGSTEntry(data: { vehicle_id: string; belongs_to_month: string; gross_gst: number; gst_commission_rate: number }): Promise<GSTEntry> {
   const commission_on_gst = round2(data.gross_gst * data.gst_commission_rate);
   const net_gst           = round2(data.gross_gst - commission_on_gst);
@@ -532,6 +592,15 @@ export async function getTransportIncomeByOwnerIds(ownerIds: string[], month: st
   return data ?? [];
 }
 
+export async function getAllTransportIncome(month: string): Promise<TransportIncome[]> {
+  const { data, error } = await supabase
+    .from('transport_income')
+    .select('id,transport_owner_id,month,transport_payment,diesel_payment,created_at')
+    .eq('month', month);
+  if (error) throw error;
+  return data ?? [];
+}
+
 export async function upsertTransportIncome(data: { transport_owner_id: string; month: string; transport_payment: number; diesel_payment: number }): Promise<void> {
   await runWriteThroughQueue(
     'upsertTransportIncome',
@@ -563,6 +632,15 @@ export async function getPayments(transportOwnerId: string, month: string): Prom
     .eq('transport_owner_id', transportOwnerId)
     .eq('month', month)
     .order('date').order('created_at');
+  if (error) throw error;
+  return data ?? [];
+}
+
+export async function getAllPaymentAmounts(month: string): Promise<Array<{ transport_owner_id: string; amount: number }>> {
+  const { data, error } = await supabase
+    .from('payments')
+    .select('transport_owner_id,amount')
+    .eq('month', month);
   if (error) throw error;
   return data ?? [];
 }
@@ -600,7 +678,18 @@ export async function getTotalPayments(transportOwnerId: string, month: string):
   const { data, error } = await supabase
     .from('payments').select('amount').eq('transport_owner_id', transportOwnerId).eq('month', month);
   if (error) throw error;
-  return round2((data ?? []).reduce((s, p) => s + Number(p.amount), 0));
+  return data.reduce((acc, p) => acc + Number(p.amount), 0);
+}
+
+// ── Trip Entries ─────────────────────────────────────────────
+
+export async function getAllTripTonnes(month: string): Promise<Array<{ vehicle_id: string; tonnes: number }>> {
+  const { data, error } = await supabase
+    .from('trip_entries')
+    .select('vehicle_id,tonnes')
+    .eq('month', month);
+  if (error) throw error;
+  return data ?? [];
 }
 
 export async function getPaymentAmountsByOwnerIds(ownerIds: string[], month: string): Promise<Array<{ transport_owner_id: string; amount: number }>> {
@@ -640,6 +729,9 @@ export interface ChallanEntry {
   tr_no: string | null;
   challan_no: string | null;
   vehicle_no: string | null;
+  transporter: string | null;
+  destination: string | null;
+  source: string | null;
   tare_weight_kg: number | null;
   gross_weight_kg: number | null;
   net_weight_kg: number | null;

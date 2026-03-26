@@ -1,30 +1,25 @@
 import {
-  getDieselProfitsByVehicleIds,
-  getGSTCommissionsByVehicleIds,
-  getPaymentAmountsByOwnerIds,
-  getTransportIncomeByOwnerIds,
+  getAllDieselProfits,
+  getAllGSTCommissions,
+  getAllPaymentAmounts,
+  getAllTransportIncome,
   getTransportOwners,
-  getTripEntriesByVehicleIds,
-  getVehiclesByOwnerIds,
+  getAllTripTonnes,
+  getAllVehicles,
   getActiveRoutes,
 } from './queries';
 import { round2 } from '../constants/defaults';
 import type { TransportOwner } from '../types';
 
 export async function fetchHomeSummary(month: string) {
-  const owners = await getTransportOwners();
-  const ownerIds = owners.map((o) => o.id);
-  const [vehicles, incomes, payments] = await Promise.all([
-    getVehiclesByOwnerIds(ownerIds),
-    getTransportIncomeByOwnerIds(ownerIds, month),
-    getPaymentAmountsByOwnerIds(ownerIds, month),
-  ]);
-
-  const vehicleIds = vehicles.map((v) => v.id);
-  const [tripRows, dieselRows, gstRows] = await Promise.all([
-    getTripEntriesByVehicleIds(vehicleIds, month),
-    getDieselProfitsByVehicleIds(vehicleIds, month),
-    getGSTCommissionsByVehicleIds(vehicleIds, month),
+  const [owners, vehicles, incomes, payments, tripRows, dieselRows, gstRows] = await Promise.all([
+    getTransportOwners(),
+    getAllVehicles(),
+    getAllTransportIncome(month),
+    getAllPaymentAmounts(month),
+    getAllTripTonnes(month),
+    getAllDieselProfits(month),
+    getAllGSTCommissions(month),
   ]);
 
   const vehicleOwnerMap = new Map<string, string>();
@@ -105,12 +100,11 @@ export async function fetchHomeSummary(month: string) {
 }
 
 export async function fetchTransportersSummary(month: string) {
-  const owners = await getTransportOwners();
-  const ownerIds = owners.map((o) => o.id);
-  const [vehicles, incomes, payments] = await Promise.all([
-    getVehiclesByOwnerIds(ownerIds),
-    getTransportIncomeByOwnerIds(ownerIds, month),
-    getPaymentAmountsByOwnerIds(ownerIds, month),
+  const [owners, vehicles, incomes, payments] = await Promise.all([
+    getTransportOwners(),
+    getAllVehicles(),
+    getAllTransportIncome(month),
+    getAllPaymentAmounts(month),
   ]);
 
   const vehicleCountByOwner = new Map<string, number>();

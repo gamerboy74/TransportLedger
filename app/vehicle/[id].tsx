@@ -25,6 +25,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useThemedNotice } from '../../components/ThemedNoticeProvider';
 import { SkeletonBlock, SkeletonCard } from '../../components/Skeleton';
 import ThemedDateField from '../../components/ThemedDateField';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   addGSTEntry,
   addOtherDeduction,
@@ -140,13 +141,13 @@ const modalInitialState: ModalVisibilityState = {
 
 function modalReducer(state: ModalVisibilityState, action: ModalAction): ModalVisibilityState {
   switch (action.type) {
-    case 'OPEN_GST':    return { ...state, showGST: true };
-    case 'CLOSE_GST':   return { ...state, showGST: false };
-    case 'OPEN_OTHER':  return { ...state, showOther: true };
+    case 'OPEN_GST': return { ...state, showGST: true };
+    case 'CLOSE_GST': return { ...state, showGST: false };
+    case 'OPEN_OTHER': return { ...state, showOther: true };
     case 'CLOSE_OTHER': return { ...state, showOther: false };
-    case 'OPEN_DEL':    return { ...state, delModal: action.payload };
-    case 'CLOSE_DEL':   return { ...state, delModal: null };
-    default:            return state;
+    case 'OPEN_DEL': return { ...state, delModal: action.payload };
+    case 'CLOSE_DEL': return { ...state, delModal: null };
+    default: return state;
   }
 }
 
@@ -169,162 +170,116 @@ interface UseVehicleDataResult {
   load: (force?: boolean) => Promise<void>;
 }
 
-interface VehicleScreenCacheEntry {
-  vehicle: Vehicle;
-  owner: TransportOwner;
-  trips: TripEntry[];
-  diesel: DieselLog[];
-  gst: GSTEntry[];
-  others: OtherDeduction[];
-  settlement: SettlementResult;
-  adminE: AdminEarnings | null;
-  totalPaid: number;
-  at: number;
-}
-
-const VEHICLE_SCREEN_CACHE_TTL_MS = 60_000;
-const vehicleScreenCache = new Map<string, VehicleScreenCacheEntry>();
-
-function vehicleCacheKey(id: string | undefined, month: string): string {
-  return `${id ?? 'none'}|${month}`;
-}
-
-function invalidateVehicleScreenCache(id?: string, month?: string) {
-  if (!id && !month) {
-    vehicleScreenCache.clear();
-    return;
-  }
-  for (const key of vehicleScreenCache.keys()) {
-    const [cachedId, cachedMonth] = key.split('|');
-    if (id && cachedId !== id) continue;
-    if (month && cachedMonth !== month) continue;
-    vehicleScreenCache.delete(key);
-  }
-}
+// Removed manual vehicleScreenCache logic in favor of React Query consolidated caching.
 
 function useVehicleData(id: string | undefined, month: string): UseVehicleDataResult {
-  const [vehicle, setVehicle]       = useState<Vehicle | null>(null);
-  const [owner, setOwner]           = useState<TransportOwner | null>(null);
-  const [trips, setTrips]           = useState<TripEntry[]>([]);
-  const [diesel, setDiesel]         = useState<DieselLog[]>([]);
-  const [gst, setGST]               = useState<GSTEntry[]>([]);
-  const [others, setOthers]         = useState<OtherDeduction[]>([]);
-  const [settlement, setSettlement] = useState<SettlementResult | null>(null);
-  const [adminE, setAdminE]         = useState<AdminEarnings | null>(null);
-  const [totalPaid, setTotalPaid]   = useState(0);
-  const [loading, setLoading]       = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
+  const queryClient = useQueryClient();
+  const { globalSettings } = useAppStore();
 
-  const requestSeqRef      = useRef(0);
-  const notice             = useThemedNotice();
-  const cacheKey = useMemo(() => vehicleCacheKey(id, month), [id, month]);
+  const vehicleQ = useQuery({
+    queryKey: ['vehicle', id],
+    queryFn: () => getVehicle(id!),
+    enabled: !!id,
+  });
 
-  useEffect(() => {
-    const cached = vehicleScreenCache.get(cacheKey);
-    if (!cached) return;
-    setVehicle(cached.vehicle);
-    setOwner(cached.owner);
-    setTrips(cached.trips);
-    setDiesel(cached.diesel);
-    setGST(cached.gst);
-    setOthers(cached.others);
-    setSettlement(cached.settlement);
-    setAdminE(cached.adminE);
-    setTotalPaid(cached.totalPaid);
-    setLoading(false);
-  }, [cacheKey]);
+  const ownerQ = useQuery({
+    queryKey: ['transportOwner', vehicleQ.data?.transport_owner_id],
+    queryFn: () => getTransportOwner(vehicleQ.data!.transport_owner_id),
+    enabled: !!vehicleQ.data?.transport_owner_id,
+  });
 
-  const load = useCallback(async (force = false) => {
-    if (!id) return;
-    const seq = ++requestSeqRef.current;
-    const now = Date.now();
-    if (force) setRefreshing(true);
+  const tripsQ = useQuery({
+    queryKey: ['trips', id, month],
+    queryFn: () => getTripEntries(id!, month),
+    enabled: !!id,
+  });
 
-    const cached = vehicleScreenCache.get(cacheKey);
-    if (!force && cached && now - cached.at < VEHICLE_SCREEN_CACHE_TTL_MS) {
-      setRefreshing(false);
-      setLoading(false);
-      return;
-    }
+  const dieselQ = useQuery({
+    queryKey: ['diesel', id, month],
+    queryFn: () => getDieselLogs(id!, month),
+    enabled: !!id,
+  });
 
-    try {
-      const v = await getVehicle(id);
-      if (!v) throw new Error('Vehicle not found');
-      const o = await getTransportOwner(v.transport_owner_id);
-      if (!o) throw new Error('Owner not found');
+  const gstQ = useQuery({
+    queryKey: ['gst', id, month],
+    queryFn: () => getGSTEntries(id!, month),
+    enabled: !!id,
+  });
 
-      const [t, d, g, oth, paid] = await Promise.all([
-        getTripEntries(id, month),
-        getDieselLogs(id, month),
-        getGSTEntries(id, month),
-        getOtherDeductions(id, month),
-        getVehiclePayments(id, month),
-      ]);
+  const othersQ = useQuery({
+    queryKey: ['otherDeductions', id, month],
+    queryFn: () => getOtherDeductions(id!, month),
+    enabled: !!id,
+  });
 
-      if (seq !== requestSeqRef.current) return;
+  const paymentsQ = useQuery({
+    queryKey: ['vehiclePayments', id, month],
+    queryFn: () => getVehiclePayments(id!, month),
+    enabled: !!id,
+  });
 
-      const effectiveCommissionRate = Number(v.commission_rate ?? o.commission_rate ?? 0);
-      const effectiveAccidentalRate = Number(v.accidental_rate ?? o.accidental_rate ?? 0);
+  const loading = vehicleQ.isLoading || ownerQ.isLoading || tripsQ.isLoading || dieselQ.isLoading || gstQ.isLoading || othersQ.isLoading || paymentsQ.isLoading;
+  const refreshing = vehicleQ.isFetching || ownerQ.isFetching || tripsQ.isFetching || dieselQ.isFetching || gstQ.isFetching || othersQ.isFetching || paymentsQ.isFetching;
 
-      const { globalSettings } = useAppStore.getState();
-      const s = calculateSettlement({
-        trips: t,
-        diesel: d,
-        commissionRate: effectiveCommissionRate,
-        accidentalRate: effectiveAccidentalRate,
-        tdsRate: globalSettings.tds_rate,
-        gstEntries: g,
-        otherDeductions: oth,
-      });
+  const settlement = useMemo(() => {
+    if (!vehicleQ.data || !ownerQ.data || loading) return null;
+    const v = vehicleQ.data;
+    const o = ownerQ.data;
+    const effectiveCommissionRate = Number(v.commission_rate ?? o.commission_rate ?? 0);
+    const effectiveAccidentalRate = Number(v.accidental_rate ?? o.accidental_rate ?? 0);
 
-      const ae = calculateAdminEarnings({
-        totalTonnes:    s.totalTonnes,
-        commissionRate: effectiveCommissionRate,
-        diesel:         d,
-        gstEntries:     g,
-        buyRate:        globalSettings.diesel_buy_rate,
-        sellRate:       globalSettings.diesel_sell_rate,
-      });
+    return calculateSettlement({
+      trips: tripsQ.data ?? [],
+      diesel: dieselQ.data ?? [],
+      commissionRate: effectiveCommissionRate,
+      accidentalRate: effectiveAccidentalRate,
+      tdsRate: globalSettings.tds_rate,
+      gstEntries: gstQ.data ?? [],
+      otherDeductions: othersQ.data ?? [],
+    });
+  }, [vehicleQ.data, ownerQ.data, tripsQ.data, dieselQ.data, gstQ.data, othersQ.data, globalSettings.tds_rate, loading]);
 
-      const cacheEntry: VehicleScreenCacheEntry = {
-        vehicle: v,
-        owner: o,
-        trips: t,
-        diesel: d,
-        gst: g,
-        others: oth,
-        settlement: s,
-        adminE: ae,
-        totalPaid: paid,
-        at: Date.now(),
-      };
-      vehicleScreenCache.set(cacheKey, cacheEntry);
+  const adminE = useMemo(() => {
+    if (!vehicleQ.data || !ownerQ.data || !settlement || loading) return null;
+    const v = vehicleQ.data;
+    const o = ownerQ.data;
+    const effectiveCommissionRate = Number(v.commission_rate ?? o.commission_rate ?? 0);
 
-      setVehicle(v);
-      setOwner(o);
-      setTrips(t);
-      setDiesel(d);
-      setGST(g);
-      setOthers(oth);
-      setSettlement(s);
-      setAdminE(ae);
-      setTotalPaid(paid);
-    } catch (e) {
-      if (seq !== requestSeqRef.current) return;
-      notice.showError('Error', String(e));
-    } finally {
-      if (seq === requestSeqRef.current) {
-        setLoading(false);
-        setRefreshing(false);
-      }
-    }
-  }, [id, cacheKey, notice]);
+    return calculateAdminEarnings({
+      totalTonnes: settlement.totalTonnes,
+      commissionRate: effectiveCommissionRate,
+      diesel: dieselQ.data ?? [],
+      gstEntries: gstQ.data ?? [],
+      buyRate: globalSettings.diesel_buy_rate,
+      sellRate: globalSettings.diesel_sell_rate,
+    });
+  }, [vehicleQ.data, ownerQ.data, settlement, dieselQ.data, gstQ.data, globalSettings.diesel_buy_rate, globalSettings.diesel_sell_rate, loading]);
+
+  const refresh = useCallback(async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['vehicle', id] }),
+      queryClient.invalidateQueries({ queryKey: ['transportOwner', vehicleQ.data?.transport_owner_id] }),
+      queryClient.invalidateQueries({ queryKey: ['trips', id, month] }),
+      queryClient.invalidateQueries({ queryKey: ['diesel', id, month] }),
+      queryClient.invalidateQueries({ queryKey: ['gst', id, month] }),
+      queryClient.invalidateQueries({ queryKey: ['otherDeductions', id, month] }),
+      queryClient.invalidateQueries({ queryKey: ['vehiclePayments', id, month] }),
+    ]);
+  }, [queryClient, id, month, vehicleQ.data?.transport_owner_id]);
 
   return {
-    vehicle, owner, trips, diesel, gst, others,
-    settlement, adminE, totalPaid,
-    loading, refreshing,
-    load,
+    vehicle: vehicleQ.data ?? null,
+    owner: ownerQ.data ?? null,
+    trips: tripsQ.data ?? [],
+    diesel: dieselQ.data ?? [],
+    gst: gstQ.data ?? [],
+    others: othersQ.data ?? [],
+    settlement,
+    adminE,
+    totalPaid: paymentsQ.data ?? 0,
+    loading,
+    refreshing,
+    load: refresh,
   };
 }
 
@@ -337,12 +292,13 @@ export default function VehicleDetailScreen() {
   const initialMonth = mParam ?? monthKey();
 
   // ── State ─────────────────────────────────────────────────────────────────
-  const [month, setMonth]         = useState(initialMonth);
+  const [month, setMonth] = useState(initialMonth);
   const [monthDate, setMonthDate] = useState(`${initialMonth}-01`);
   const [delReason, setDelReason] = useState('');
   const [modalState, dispatchModal] = useReducer(modalReducer, modalInitialState);
 
   const notice = useThemedNotice();
+  const queryClient = useQueryClient();
 
   // ── Data hook ─────────────────────────────────────────────────────────────
   const {
@@ -366,35 +322,41 @@ export default function VehicleDetailScreen() {
   }, [monthDate, month]);
 
   useFocusEffect(useCallback(() => {
-    load(false);
+    load(); // React Query handles fetching on mount/focus
   }, [load]));
 
   // ── Callbacks ─────────────────────────────────────────────────────────────
   const shiftMonth = useCallback((delta: number) => {
     const [y, m] = month.split('-').map(Number);
-    const date   = new Date(y, m - 1 + delta, 1);
-    const next   = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+    const date = new Date(y, m - 1 + delta, 1);
+    const next = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
     setMonthDate(`${next}-01`);
   }, [month]);
 
   const handlePrevMonth = useCallback(() => shiftMonth(-1), [shiftMonth]);
   const handleNextMonth = useCallback(() => shiftMonth(1), [shiftMonth]);
 
-  const handleOpenGST   = useCallback(() => dispatchModal({ type: 'OPEN_GST' }), []);
-  const handleCloseGST  = useCallback(() => dispatchModal({ type: 'CLOSE_GST' }), []);
-  const handleGSTSaved  = useCallback(() => {
+  const handleOpenGST = useCallback(() => dispatchModal({ type: 'OPEN_GST' }), []);
+  const handleCloseGST = useCallback(() => dispatchModal({ type: 'CLOSE_GST' }), []);
+  const handleGSTSaved = useCallback(() => {
     dispatchModal({ type: 'CLOSE_GST' });
-    invalidateVehicleScreenCache(id, month);
-    load(true);
-  }, [id, month, load]);
+    void queryClient.invalidateQueries({ queryKey: ['gst', id, month] });
+    void queryClient.invalidateQueries({ queryKey: ['vehiclePayments', id, month] }); // Payments might change
+    void queryClient.invalidateQueries({ queryKey: ['trips', id, month] }); // Settlement depends on trips, diesel, gst, others
+    void queryClient.invalidateQueries({ queryKey: ['diesel', id, month] });
+    void queryClient.invalidateQueries({ queryKey: ['otherDeductions', id, month] });
+  }, [id, month, queryClient]);
 
-  const handleOpenOther  = useCallback(() => dispatchModal({ type: 'OPEN_OTHER' }), []);
+  const handleOpenOther = useCallback(() => dispatchModal({ type: 'OPEN_OTHER' }), []);
   const handleCloseOther = useCallback(() => dispatchModal({ type: 'CLOSE_OTHER' }), []);
   const handleOtherSaved = useCallback(() => {
     dispatchModal({ type: 'CLOSE_OTHER' });
-    invalidateVehicleScreenCache(id, month);
-    load(true);
-  }, [id, month, load]);
+    void queryClient.invalidateQueries({ queryKey: ['otherDeductions', id, month] });
+    void queryClient.invalidateQueries({ queryKey: ['vehiclePayments', id, month] }); // Payments might change
+    void queryClient.invalidateQueries({ queryKey: ['trips', id, month] }); // Settlement depends on trips, diesel, gst, others
+    void queryClient.invalidateQueries({ queryKey: ['diesel', id, month] });
+    void queryClient.invalidateQueries({ queryKey: ['gst', id, month] });
+  }, [id, month, queryClient]);
 
   const handleCloseDel = useCallback(() => {
     dispatchModal({ type: 'CLOSE_DEL' });
@@ -410,10 +372,9 @@ export default function VehicleDetailScreen() {
     }
     try {
       if (delModal.type === 'diesel') await softDeleteDieselLog(delModal.id, delReason.trim());
-      else if (delModal.type === 'trip')  await deleteTripEntry(delModal.id);
+      else if (delModal.type === 'trip') await deleteTripEntry(delModal.id);
       else if (delModal.type === 'other') await deleteOtherDeduction(delModal.id);
-      else if (delModal.type === 'gst')   await deleteGSTEntry(delModal.id);
-      invalidateVehicleScreenCache(id, month);
+      else if (delModal.type === 'gst') await deleteGSTEntry(delModal.id);
       handleCloseDel();
       load(true);
     } catch (e) {
@@ -558,20 +519,20 @@ export default function VehicleDetailScreen() {
           <Text style={s.cardTitle}>📋 Settlement Breakdown</Text>
 
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-  <SL>① WEIGHT EARNINGS</SL>
-  <TouchableOpacity onPress={() => router.push({ pathname: '/trip-history' as any, params: { vehicleId: id, month, ownerId: vehicle?.transport_owner_id } })}>
-    <Ionicons name="time-outline" size={18} color="#d9468f" />
-  </TouchableOpacity>
-</View>
+            <SL>① WEIGHT EARNINGS</SL>
+            <TouchableOpacity onPress={() => router.push({ pathname: '/trip-history' as any, params: { vehicleId: id, month, ownerId: vehicle?.transport_owner_id } })}>
+              <Ionicons name="time-outline" size={18} color="#d9468f" />
+            </TouchableOpacity>
+          </View>
           {tripRows}
           {trips.length === 0 && <Text style={s.emptyText}>No trips this month</Text>}
           <TRow label="GROSS EARNING" value={fmt(settlement.gross)} />
 
           <SL>② DEDUCTIONS</SL>
-          <Row 
-            label={`TDS @ ${(useAppStore.getState().globalSettings.tds_rate * 100).toFixed(1)}%`} 
-            value={`− ${fmt(settlement.tds)}`} 
-            red 
+          <Row
+            label={`TDS @ ${(useAppStore.getState().globalSettings.tds_rate * 100).toFixed(1)}%`}
+            value={`− ${fmt(settlement.tds)}`}
+            red
           />
           <Row
             label={`Commission (${settlement.totalTonnes}T × ₹${vehicle.commission_rate})`}
@@ -630,9 +591,9 @@ export default function VehicleDetailScreen() {
             <Text style={s.adminCardTitle}>🔒 YOUR EARNINGS (Private)</Text>
             {(
               [
-                { label: 'Commission Income',    value: adminE.commissionIncome },
+                { label: 'Commission Income', value: adminE.commissionIncome },
                 { label: 'Diesel Profit (₹1.08/L)', value: adminE.dieselProfit },
-                { label: 'GST Commission',       value: adminE.gstCommission },
+                { label: 'GST Commission', value: adminE.gstCommission },
               ] as const
             ).map(e => (
               <View key={e.label} style={s.adminRow}>
@@ -751,7 +712,7 @@ const GSTModal = React.memo(function GSTModal({
 }: GSTModalProps) {
   const [grossGST, setGrossGST] = useState('');
   const [forMonth, setForMonth] = useState(month);
-  const [saving, setSaving]     = useState(false);
+  const [saving, setSaving] = useState(false);
   const notice = useThemedNotice();
 
   const preview = useMemo(() => {
@@ -811,7 +772,7 @@ const GSTModal = React.memo(function GSTModal({
 const OtherModal = React.memo(function OtherModal({
   visible, vehicleId, month, onClose, onSaved,
 }: OtherModalProps) {
-  const [label, setLabel]   = useState('');
+  const [label, setLabel] = useState('');
   const [amount, setAmount] = useState('');
   const [saving, setSaving] = useState(false);
   const notice = useThemedNotice();
@@ -895,40 +856,40 @@ const SaveBtn = React.memo(function SaveBtn({ saving, onPress, label }: SaveBtnP
 
 const s = StyleSheet.create({
   // Layout
-  root:            { flex: 1, backgroundColor: '#fff7fb' },
-  loadingContainer:{ flex: 1, backgroundColor: '#fff7fb', padding: 16 },
-  errorContainer:  { flex: 1, backgroundColor: '#fff7fb', alignItems: 'center', justifyContent: 'center' },
-  errorText:       { color: '#ef4444' },
-  backLink:        { color: '#db2777' },
-  scroll:          { flex: 1, paddingHorizontal: 16 },
+  root: { flex: 1, backgroundColor: '#fff7fb' },
+  loadingContainer: { flex: 1, backgroundColor: '#fff7fb', padding: 16 },
+  errorContainer: { flex: 1, backgroundColor: '#fff7fb', alignItems: 'center', justifyContent: 'center' },
+  errorText: { color: '#ef4444' },
+  backLink: { color: '#db2777' },
+  scroll: { flex: 1, paddingHorizontal: 16 },
 
   // Decorative blobs
-  blobTopLeft:     { position: 'absolute', top: 18, left: -46, width: 180, height: 180, borderRadius: 90, backgroundColor: '#f9a8d455' },
+  blobTopLeft: { position: 'absolute', top: 18, left: -46, width: 180, height: 180, borderRadius: 90, backgroundColor: '#f9a8d455' },
   blobBottomRight: { position: 'absolute', top: 180, right: -66, width: 220, height: 220, borderRadius: 110, backgroundColor: '#fbcfe855' },
 
   // Skeleton
   skeletonRow: { flexDirection: 'row', gap: 8 },
 
   // Header
-  header:           { flexDirection: 'row', alignItems: 'center', padding: 16, paddingTop: 20 },
-  backArrow:        { color: '#db2777', fontSize: 18 },
-  headerTextGroup:  { flex: 1, minWidth: 0 },
-  headerTitle:      { color: '#111111', fontSize: 20, fontWeight: 'bold' },
-  headerSub:        { color: '#6b5c67', fontSize: 12 },
-  headerAmount:     { alignItems: 'flex-end' },
-  headerAmountValue:{ fontWeight: 'bold', fontSize: 16 },
-  headerAmountLabel:{ color: '#6b5c67', fontSize: 11 },
+  header: { flexDirection: 'row', alignItems: 'center', padding: 16, paddingTop: 20 },
+  backArrow: { color: '#db2777', fontSize: 18 },
+  headerTextGroup: { flex: 1, minWidth: 0 },
+  headerTitle: { color: '#111111', fontSize: 20, fontWeight: 'bold' },
+  headerSub: { color: '#6b5c67', fontSize: 12 },
+  headerAmount: { alignItems: 'flex-end' },
+  headerAmountValue: { fontWeight: 'bold', fontSize: 16 },
+  headerAmountLabel: { color: '#6b5c67', fontSize: 11 },
 
   // Month picker
   monthPickerWrapper: { paddingHorizontal: 16, paddingBottom: 8 },
-  monthPickerCard:    { backgroundColor: '#ffffffcc', borderColor: '#f2d7e6', borderWidth: 1, borderRadius: 14, padding: 12 },
-  sectionLabel:       { color: '#6b5c67', fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 8 },
-  monthBtnRow:        { flexDirection: 'row', gap: 8 },
-  monthBtn:           { flex: 1, backgroundColor: '#fce7f3', borderRadius: 10, paddingVertical: 10, alignItems: 'center' },
-  monthBtnText:       { color: '#111111', fontWeight: '700' },
+  monthPickerCard: { backgroundColor: '#ffffffcc', borderColor: '#f2d7e6', borderWidth: 1, borderRadius: 14, padding: 12 },
+  sectionLabel: { color: '#6b5c67', fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 8 },
+  monthBtnRow: { flexDirection: 'row', gap: 8 },
+  monthBtn: { flex: 1, backgroundColor: '#fce7f3', borderRadius: 10, paddingVertical: 10, alignItems: 'center' },
+  monthBtnText: { color: '#111111', fontWeight: '700' },
 
   // Cards
-  card:      { backgroundColor: '#ffffffcc', borderColor: '#f2d7e6', borderWidth: 1, borderRadius: 20, padding: 16, marginBottom: 12 },
+  card: { backgroundColor: '#ffffffcc', borderColor: '#f2d7e6', borderWidth: 1, borderRadius: 20, padding: 16, marginBottom: 12 },
   cardTitle: { color: '#111111', fontWeight: 'bold', fontSize: 16, marginBottom: 16 },
   adminCard: { backgroundColor: '#ffffffcc', borderRadius: 20, padding: 16, marginBottom: 12, borderWidth: 1, borderColor: '#f2d7e6' },
 
@@ -937,23 +898,23 @@ const s = StyleSheet.create({
 
   // Row
   rowContainer: { flexDirection: 'row', alignItems: 'center', paddingVertical: 4 },
-  rowLabel:     { color: '#6b5c67', fontSize: 12, flex: 1, marginRight: 8 },
-  rowValue:     { fontSize: 12, fontWeight: '600' },
+  rowLabel: { color: '#6b5c67', fontSize: 12, flex: 1, marginRight: 8 },
+  rowValue: { fontSize: 12, fontWeight: '600' },
 
   // TRow
   tRowContainer: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 6, borderTopWidth: 1, borderTopColor: '#f2d7e6', marginTop: 4 },
-  tRowLabel:     { color: '#6b5c67', fontSize: 12, fontWeight: 'bold' },
-  tRowValue:     { fontSize: 13, fontWeight: 'bold' },
+  tRowLabel: { color: '#6b5c67', fontSize: 12, fontWeight: 'bold' },
+  tRowValue: { fontSize: 13, fontWeight: 'bold' },
 
   // Colors
-  redText:   { color: '#ef4444' },
+  redText: { color: '#ef4444' },
   greenText: { color: '#22c55e' },
-  darkText:  { color: '#111111', fontSize: 13 },
-  delIcon:   { color: '#6b5c67', fontSize: 13 },
+  darkText: { color: '#111111', fontSize: 13 },
+  delIcon: { color: '#6b5c67', fontSize: 13 },
 
   // Section header row (GST / Other)
   sectionHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  addLink:          { color: '#db2777', fontSize: 12, fontWeight: '700' },
+  addLink: { color: '#db2777', fontSize: 12, fontWeight: '700' },
 
   // Empty
   emptyText: { color: '#6b5c67', fontSize: 12, marginBottom: 8 },
@@ -962,58 +923,62 @@ const s = StyleSheet.create({
   divider: { height: 1, backgroundColor: '#f2d7e6', marginVertical: 14 },
 
   // Net payable
-  netPayableRow:   { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  netPayableRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   netPayableLabel: { color: '#111111', fontWeight: 'bold', fontSize: 16 },
   netPayableValue: { color: '#be185d', fontWeight: 'bold', fontSize: 22 },
-  paidRow:         { flexDirection: 'row', justifyContent: 'space-between', marginTop: 6 },
-  subLabel:        { color: '#6b5c67', fontSize: 12 },
-  outstandingRow:  { flexDirection: 'row', justifyContent: 'space-between', marginTop: 4 },
-  outstandingLabel:{ color: '#111111', fontWeight: '700' },
-  outstandingValue:{ fontWeight: 'bold', fontSize: 18 },
+  paidRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 6 },
+  subLabel: { color: '#6b5c67', fontSize: 12 },
+  outstandingRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 4 },
+  outstandingLabel: { color: '#111111', fontWeight: '700' },
+  outstandingValue: { fontWeight: 'bold', fontSize: 18 },
 
   // Admin card
   adminCardTitle: { color: '#be185d', fontWeight: 'bold', marginBottom: 12 },
-  adminRow:       { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 },
-  adminRowLabel:  { color: '#6b5c67', fontSize: 13 },
-  adminRowValue:  { color: '#111111', fontSize: 13, fontWeight: '500' },
-  adminTotalRow:  { flexDirection: 'row', justifyContent: 'space-between' },
-  adminTotalLabel:{ color: '#be185d', fontWeight: '700' },
-  adminTotalValue:{ color: '#be185d', fontWeight: 'bold', fontSize: 16 },
+  adminRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 },
+  adminRowLabel: { color: '#6b5c67', fontSize: 13 },
+  adminRowValue: { color: '#111111', fontSize: 13, fontWeight: '500' },
+  adminTotalRow: { flexDirection: 'row', justifyContent: 'space-between' },
+  adminTotalLabel: { color: '#be185d', fontWeight: '700' },
+  adminTotalValue: { color: '#be185d', fontWeight: 'bold', fontSize: 16 },
 
   // Modal overlay / delete sheet
   modalOverlay: { flex: 1, backgroundColor: '#000000bb', justifyContent: 'flex-end' },
-  delSheet:     { backgroundColor: '#ffffff', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 20 },
-  delTitle:     { color: '#111111', fontWeight: 'bold', fontSize: 18, marginBottom: 4 },
-  delSubtitle:  { color: '#6b5c67', marginBottom: 16 },
-  delBtnRow:    { flexDirection: 'row', gap: 10 },
-  cancelBtn:    { flex: 1, backgroundColor: '#fce7f3', borderRadius: 12, padding: 14, alignItems: 'center' },
-  cancelBtnText:{ color: '#111111', fontWeight: '700' },
-  deleteBtn:    { flex: 1, backgroundColor: '#ef4444', borderRadius: 12, padding: 14, alignItems: 'center' },
-  deleteBtnText:{ color: 'white', fontWeight: 'bold' },
+  delSheet: { backgroundColor: '#ffffff', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 20 },
+  delTitle: { color: '#111111', fontWeight: 'bold', fontSize: 18, marginBottom: 4 },
+  delSubtitle: { color: '#6b5c67', marginBottom: 16 },
+  delBtnRow: { flexDirection: 'row', gap: 10 },
+  cancelBtn: { flex: 1, backgroundColor: '#fce7f3', borderRadius: 12, padding: 14, alignItems: 'center' },
+  cancelBtnText: { color: '#111111', fontWeight: '700' },
+  deleteBtn: { flex: 1, backgroundColor: '#ef4444', borderRadius: 12, padding: 14, alignItems: 'center' },
+  deleteBtnText: { color: 'white', fontWeight: 'bold' },
 
   // Modal sheet
   modalSheet: { flex: 1, backgroundColor: '#fff7fb', padding: 20 },
 
   // MHead
-  mHeadRow:    { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 },
-  mHeadTitle:  { color: '#111111', fontSize: 20, fontWeight: 'bold' },
+  mHeadRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 },
+  mHeadTitle: { color: '#111111', fontSize: 20, fontWeight: 'bold' },
   mHeadCancel: { color: '#db2777' },
 
   // MF / TextInput
   fieldLabel: { color: '#6b5c67', fontSize: 11, fontWeight: '600', marginBottom: 6, textTransform: 'uppercase' },
-  textInput:  { backgroundColor: '#ffffff', borderColor: '#f2d7e6', borderWidth: 1, color: '#111111', borderRadius: 12, padding: 14 },
+  textInput: { backgroundColor: '#ffffff', borderColor: '#f2d7e6', borderWidth: 1, color: '#111111', borderRadius: 12, padding: 14 },
 
   // SaveBtn
-  saveBtn:        { backgroundColor: '#ec4899', borderRadius: 14, padding: 16, alignItems: 'center', marginTop: 8 },
-  saveBtnDisabled:{ backgroundColor: '#d4d4d8' },
-  saveBtnText:    { color: 'white', fontWeight: 'bold', fontSize: 16 },
+  saveBtn: { backgroundColor: '#ec4899', borderRadius: 14, padding: 16, alignItems: 'center', marginTop: 8 },
+  saveBtnDisabled: { backgroundColor: '#d4d4d8' },
+  saveBtnText: { color: 'white', fontWeight: 'bold', fontSize: 16 },
 
   // GST preview
-  previewCard:     { backgroundColor: '#ffffffcc', borderColor: '#f2d7e6', borderWidth: 1, borderRadius: 12, padding: 14, marginBottom: 16 },
-  previewTitle:    { color: '#6b5c67', fontSize: 12, marginBottom: 8 },
-  previewRow:      { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 },
+  previewCard: { backgroundColor: '#ffffffcc', borderColor: '#f2d7e6', borderWidth: 1, borderRadius: 12, padding: 14, marginBottom: 16 },
+  previewTitle: { color: '#6b5c67', fontSize: 12, marginBottom: 8 },
+  previewRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 },
   previewRowLabel: { color: '#6b5c67', fontSize: 13 },
-  previewComm:     { color: '#be185d', fontSize: 13 },
+  previewComm: { color: '#be185d', fontSize: 13 },
   previewNetLabel: { color: '#111111', fontSize: 13, fontWeight: 'bold' },
   previewNetValue: { color: '#22c55e', fontSize: 13, fontWeight: 'bold' },
 });
+function invalidateVehicleScreenCache(id: string, month: string) {
+  throw new Error('Function not implemented.');
+}
+

@@ -13,6 +13,7 @@ import { ThemedTextInput } from '../../components/ThemedTextInput';
 import { fetchTransportersSummary } from '../../lib/summaries';
 import { fmtShort, monthKey, monthLabel } from '../../constants/defaults';
 import type { TransportOwner } from '../../types';
+import UnifiedHeader from '../../components/UnifiedHeader';
 
 const SWIPE_FRICTION = 1.8;
 const SWIPE_RIGHT_THRESHOLD = 32;
@@ -52,19 +53,7 @@ export default function TransportersScreen() {
       <View style={{ position: 'absolute', top: 28, left: -50, width: 190, height: 190, borderRadius: 95, backgroundColor: '#f9a8d455' }} />
       <View style={{ position: 'absolute', top: 210, right: -65, width: 220, height: 220, borderRadius: 110, backgroundColor: '#fbcfe855' }} />
 
-      <View style={{ paddingHorizontal: 16, paddingTop: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-        <View style={{ width: 34, height: 34, borderRadius: 17, backgroundColor: '#ffffff', borderWidth: 1, borderColor: '#f2d7e6', alignItems: 'center', justifyContent: 'center' }}>
-          <Text style={{ fontSize: 16 }}>👨🏽</Text>
-        </View>
-        <View style={{ flexDirection: 'row', gap: 10 }}>
-          <Pressable onPress={() => router.push('/(tabs)/entry')} style={({ pressed }) => ({ width: 34, height: 34, borderRadius: 17, backgroundColor: '#ffffff', borderWidth: 1, borderColor: '#f2d7e6', alignItems: 'center', justifyContent: 'center', transform: [{ scale: pressed ? 0.96 : 1 }] })}>
-            <Ionicons name="add" size={18} color="#111111" />
-          </Pressable>
-          <Pressable onPress={() => router.push('/(tabs)/reports')} style={({ pressed }) => ({ width: 34, height: 34, borderRadius: 17, backgroundColor: '#ffffff', borderWidth: 1, borderColor: '#f2d7e6', alignItems: 'center', justifyContent: 'center', transform: [{ scale: pressed ? 0.96 : 1 }] })}>
-            <Ionicons name="chatbubble-ellipses-outline" size={16} color="#111111" />
-          </Pressable>
-        </View>
-      </View>
+      <UnifiedHeader />
 
       <View style={{ padding: 16, paddingTop: 8 }}>
         <View style={{ marginBottom: 12 }}>

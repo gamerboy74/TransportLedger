@@ -5,10 +5,10 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { SkeletonBlock, SkeletonCard } from '../../components/Skeleton';
-import OfflineQueueButton from '../../components/OfflineQueueButton';
 import { useThemedNotice } from '../../components/ThemedNoticeProvider';
 import { fetchHomeSummary, fetchReportsBootstrap, fetchTransportersSummary } from '../../lib/summaries';
 import { fmt, fmtShort, monthKey, monthLabel } from '../../constants/defaults';
+import UnifiedHeader from '../../components/UnifiedHeader';
 
 export default function HomeScreen() {
   const C = {
@@ -73,7 +73,7 @@ export default function HomeScreen() {
 
   useFocusEffect(useCallback(() => {
     listRef.current?.scrollTo({ y: 0, animated: false });
-    void refetch();
+    // removed manual refetch(); to respect global staleTime (60s)
     heroAnim.setValue(0);
     cardAnim.setValue(0);
     progressAnim.setValue(0);
@@ -94,39 +94,34 @@ export default function HomeScreen() {
       <View style={{ position: 'absolute', top: 180, right: -64, width: 220, height: 220, borderRadius: 110, backgroundColor: '#fbcfe844' }} />
 
       <ScrollView ref={listRef} refreshControl={<RefreshControl refreshing={isFetching && !isLoading} onRefresh={() => { void refetch(); }} tintColor={C.accent} />}>
-        <View style={{ paddingHorizontal: 16, paddingTop: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-          <View style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: '#ffffff', borderWidth: 1, borderColor: C.border, alignItems: 'center', justifyContent: 'center' }}>
-            <Text style={{ fontSize: 16 }}>👨🏽</Text>
-          </View>
-          <View style={{ flexDirection: 'row', gap: 10 }}>
-            <OfflineQueueButton />
-            <Pressable onPress={() => router.push('/trip-history' as any)} style={({ pressed }) => ({ width: 36, height: 36, borderRadius: 18, backgroundColor: '#ffffff', borderWidth: 1, borderColor: C.border, alignItems: 'center', justifyContent: 'center', transform: [{ scale: pressed ? 0.96 : 1 }] })}>
-              <Ionicons name="time-outline" size={18} color="#111111" />
-            </Pressable>
-            <Pressable onPress={() => router.push('/(tabs)/entry')} style={({ pressed }) => ({ width: 36, height: 36, borderRadius: 18, backgroundColor: '#ffffff', borderWidth: 1, borderColor: C.border, alignItems: 'center', justifyContent: 'center', transform: [{ scale: pressed ? 0.96 : 1 }] })}>
-              <Ionicons name="add" size={18} color="#111111" />
-            </Pressable>
-            <Pressable onPress={() => router.push('/settings')} style={({ pressed }) => ({ width: 36, height: 36, borderRadius: 18, backgroundColor: '#ffffff', borderWidth: 1, borderColor: C.border, alignItems: 'center', justifyContent: 'center', transform: [{ scale: pressed ? 0.96 : 1 }] })}>
-              <Ionicons name="settings-outline" size={18} color="#111111" />
-            </Pressable>
-          </View>
-        </View>
+        <UnifiedHeader />
 
-        <Animated.View style={{ paddingHorizontal: 16, paddingTop: 2, marginBottom: 8, opacity: heroAnim, transform: [{ translateY: heroAnim.interpolate({ inputRange: [0, 1], outputRange: [10, 0] }) }] }}>
+        <Animated.View style={{ paddingHorizontal: 16, paddingTop: 8, marginBottom: 8, opacity: heroAnim, transform: [{ translateY: heroAnim.interpolate({ inputRange: [0, 1], outputRange: [10, 0] }) }] }}>
           <Text style={{ color: C.muted, fontSize: 12, fontWeight: '600' }}>My Income</Text>
-          <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4 }}>
+
+          <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 8, gap: 12 }}>
             <Pressable
               onPress={() => shiftMonth(-1)}
-              style={({ pressed }) => ({ width: 26, height: 26, borderRadius: 13, backgroundColor: '#ffffff', borderWidth: 1, borderColor: C.border, alignItems: 'center', justifyContent: 'center', transform: [{ scale: pressed ? 0.96 : 1 }] })}
+              style={({ pressed }) => ({ width: 36, height: 36, borderRadius: 18, backgroundColor: '#ffffff', borderWidth: 1, borderColor: C.border, alignItems: 'center', justifyContent: 'center', transform: [{ scale: pressed ? 0.93 : 1 }] })}
             >
-              <Ionicons name="chevron-back" size={14} color="#111111" />
+              <Ionicons name="chevron-back" size={18} color={C.accent} />
             </Pressable>
-            <Text style={{ color: '#8d8289', fontSize: 11, marginHorizontal: 10 }}>{monthLabel(month)}</Text>
+
+            <Pressable
+              onPress={() => setMonth(monthKey())}
+              style={({ pressed }) => ({ flex: 1, opacity: pressed ? 0.7 : 1 })}
+            >
+              <Text style={{ color: C.text, fontSize: 18, fontWeight: '700' }}>{monthLabel(month)}</Text>
+              {month !== monthKey() && (
+                <Text style={{ color: C.accent, fontSize: 10, marginTop: 1 }}>Tap for current month</Text>
+              )}
+            </Pressable>
+
             <Pressable
               onPress={() => shiftMonth(1)}
-              style={({ pressed }) => ({ width: 26, height: 26, borderRadius: 13, backgroundColor: '#ffffff', borderWidth: 1, borderColor: C.border, alignItems: 'center', justifyContent: 'center', transform: [{ scale: pressed ? 0.96 : 1 }] })}
+              style={({ pressed }) => ({ width: 36, height: 36, borderRadius: 18, backgroundColor: '#ffffff', borderWidth: 1, borderColor: C.border, alignItems: 'center', justifyContent: 'center', transform: [{ scale: pressed ? 0.93 : 1 }] })}
             >
-              <Ionicons name="chevron-forward" size={14} color="#111111" />
+              <Ionicons name="chevron-forward" size={18} color={C.accent} />
             </Pressable>
           </View>
         </Animated.View>

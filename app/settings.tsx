@@ -6,12 +6,15 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
+import * as LocalAuthentication from 'expo-local-authentication';
 import { useAppStore } from '../store/useAppStore';
 import { ThemedTextInput } from '../components/ThemedTextInput';
 import { useThemedNotice } from '../components/ThemedNoticeProvider';
+import { useAuthStore } from '../store/useAuthStore';
 
 export default function SettingsScreen() {
   const { globalSettings, updateSettings, loadSettings, settingsLoaded } = useAppStore();
+  const { signOut } = useAuthStore();
   const notice = useThemedNotice();
 
   const [tds, setTds] = useState('');
@@ -140,6 +143,8 @@ export default function SettingsScreen() {
           </View>
         </View>
 
+        <SecuritySection C={C} />
+
         <View style={{ marginTop: 8 }}>
           <TouchableOpacity 
             onPress={handleSave} 
@@ -170,12 +175,94 @@ export default function SettingsScreen() {
           </TouchableOpacity>
         </View>
 
+        <View style={{ marginTop: 12 }}>
+          <TouchableOpacity 
+            onPress={async () => {
+              await signOut();
+              router.replace('/login' as any);
+            }} 
+            style={{ 
+              backgroundColor: '#fff',
+              padding: 16, 
+              borderRadius: 14, 
+              flexDirection: 'row', 
+              alignItems: 'center', 
+              justifyContent: 'center',
+              borderWidth: 1.5,
+              borderColor: '#fee2e2',
+            }}
+          >
+            <Ionicons name="log-out-outline" size={20} color="#ef4444" style={{ marginRight: 8 }} />
+            <Text style={{ color: '#ef4444', fontSize: 16, fontWeight: '700' }}>Sign Out & Lock App</Text>
+          </TouchableOpacity>
+        </View>
+
         <View style={{ marginTop: 32, alignItems: 'center' }}>
           <Text style={{ color: '#94a3b8', fontSize: 10, textTransform: 'uppercase', letterSpacing: 1 }}>TransportLedger v2.5.0</Text>
           <Text style={{ color: '#cbd5e1', fontSize: 9, marginTop: 4 }}>Last Synced: {new Date(globalSettings.updated_at).toLocaleString()}</Text>
         </View>
       </ScrollView>
     </SafeAreaView>
+  );
+}
+
+function SecuritySection({ C }: { C: any }) {
+  const { biometricsEnabled, setBiometricsEnabled } = useAuthStore();
+  const [supported, setSupported] = useState(false);
+  const [authType, setAuthType] = useState<string>('');
+
+  useEffect(() => {
+    checkSupport();
+  }, []);
+
+  const checkSupport = async () => {
+    const hasHardware = await LocalAuthentication.hasHardwareAsync();
+    const isEnrolled = await LocalAuthentication.isEnrolledAsync();
+    const types = await LocalAuthentication.supportedAuthenticationTypesAsync();
+    
+    setSupported(hasHardware && isEnrolled);
+    
+    if (types.includes(LocalAuthentication.AuthenticationType.FACIAL_RECOGNITION)) {
+      setAuthType('Face ID');
+    } else if (types.includes(LocalAuthentication.AuthenticationType.FINGERPRINT)) {
+      setAuthType('Fingerprint');
+    } else {
+      setAuthType('Biometrics');
+    }
+  };
+
+  if (!supported) return null;
+
+  return (
+    <View style={{ marginBottom: 24 }}>
+      <View style={styles.sectionHeader}>
+        <Ionicons name="shield-checkmark-outline" size={16} color={C.primary} />
+        <Text style={styles.sectionTitle}>Security</Text>
+      </View>
+      
+      <View style={styles.card}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+          <View style={{ flex: 1, marginRight: 12 }}>
+            <Text style={[styles.label, { marginBottom: 2 }]}>Unlock with {authType}</Text>
+            <Text style={{ fontSize: 11, color: C.muted }}>Use your device sensor to unlock the app quickly.</Text>
+          </View>
+          <TouchableOpacity 
+            onPress={() => setBiometricsEnabled(!biometricsEnabled)}
+            style={{ 
+              width: 50, 
+              height: 28, 
+              borderRadius: 14, 
+              backgroundColor: biometricsEnabled ? C.primary : '#e2e8f0',
+              paddingHorizontal: 4,
+              justifyContent: 'center',
+              alignItems: biometricsEnabled ? 'flex-end' : 'flex-start'
+            }}
+          >
+            <View style={{ width: 20, height: 20, borderRadius: 10, backgroundColor: '#fff' }} />
+          </TouchableOpacity>
+        </View>
+      </View>
+    </View>
   );
 }
 
