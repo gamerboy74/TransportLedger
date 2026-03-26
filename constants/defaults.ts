@@ -1,8 +1,4 @@
 // constants/defaults.ts
-export const TDS_RATE = 0.01;
-export const BUY_RATE = 92.92;
-export const SELL_RATE = 94.00;
-export const DIESEL_PROFIT_PER_LITRE = 1.08;
 
 export const round2 = (n: number): number => Math.round(n * 100) / 100;
 
@@ -39,3 +35,19 @@ export const fmtDate = (dateStr: string): string => {
   const [y, m, day] = d.split('-');
   return `${day}/${m}/${y}`;
 };
+
+export const prevMonth = (m: string): string => {
+  const [y, mm] = m.split('-').map(Number);
+  const d = new Date(y, mm - 2, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+};
+
+export const nextMonth = (m: string): string => {
+  const [y, mm] = m.split('-').map(Number);
+  const d = new Date(y, mm, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+};
+
+export const TDS_RATE = 0.01;
+export const BUY_RATE = 92.92;
+export const SELL_RATE = 94.00;

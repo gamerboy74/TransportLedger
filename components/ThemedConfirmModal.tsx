@@ -1,4 +1,5 @@
-import { Modal, Pressable, Text, TouchableOpacity, View } from 'react-native';
+import { Modal, Pressable, Text, TouchableOpacity, View, StyleSheet } from 'react-native';
+import { Theme } from '../constants/theme';
 
 type Props = {
   visible: boolean;
@@ -21,27 +22,21 @@ export default function ThemedConfirmModal({
   onConfirm,
   onCancel,
 }: Props) {
-  const confirmBg = destructive ? '#ef4444' : '#d9468f';
+  const confirmBg = destructive ? Theme.colors.light.error : Theme.colors.light.primary;
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
-      <Pressable style={{ flex: 1, backgroundColor: '#00000066', justifyContent: 'center', padding: 18 }} onPress={onCancel}>
-        <Pressable onPress={(e) => e.stopPropagation()} style={{ backgroundColor: '#ffffffef', borderColor: '#f2d7e6', borderWidth: 1, borderRadius: 18, padding: 16 }}>
-          <Text style={{ color: '#111111', fontSize: 18, fontWeight: '800' }}>{title}</Text>
-          <Text style={{ color: '#6b5c67', marginTop: 8, lineHeight: 20 }}>{message}</Text>
+      <Pressable style={styles.overlay} onPress={onCancel}>
+        <Pressable onPress={(e) => e.stopPropagation()} style={styles.modalContainer}>
+          <Text style={styles.title}>{title}</Text>
+          <Text style={styles.message}>{message}</Text>
 
-          <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: 10, marginTop: 16 }}>
-            <TouchableOpacity
-              onPress={onCancel}
-              style={{ backgroundColor: '#fce7f3', borderRadius: 10, paddingVertical: 10, paddingHorizontal: 14 }}
-            >
-              <Text style={{ color: '#111111', fontWeight: '700' }}>{cancelLabel}</Text>
+          <View style={styles.buttonRow}>
+            <TouchableOpacity onPress={onCancel} style={styles.cancelButton}>
+              <Text style={styles.cancelButtonText}>{cancelLabel}</Text>
             </TouchableOpacity>
-            <TouchableOpacity
-              onPress={onConfirm}
-              style={{ backgroundColor: confirmBg, borderRadius: 10, paddingVertical: 10, paddingHorizontal: 14 }}
-            >
-              <Text style={{ color: '#ffffff', fontWeight: '700' }}>{confirmLabel}</Text>
+            <TouchableOpacity onPress={onConfirm} style={[styles.confirmButton, { backgroundColor: confirmBg }]}>
+              <Text style={styles.confirmButtonText}>{confirmLabel}</Text>
             </TouchableOpacity>
           </View>
         </Pressable>
@@ -49,3 +44,56 @@ export default function ThemedConfirmModal({
     </Modal>
   );
 }
+
+const styles = StyleSheet.create({
+  overlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.4)',
+    justifyContent: 'center',
+    padding: Theme.spacing.lg,
+  },
+  modalContainer: {
+    backgroundColor: Theme.colors.light.background,
+    borderColor: Theme.colors.light.border,
+    borderWidth: 1,
+    borderRadius: Theme.borderRadius.lg,
+    padding: Theme.spacing.lg,
+    ...Theme.shadows.medium,
+  },
+  title: {
+    color: Theme.colors.light.text,
+    fontSize: Theme.typography.sizes.heading3,
+    fontWeight: Theme.typography.weights.bold,
+  },
+  message: {
+    color: Theme.colors.light.secondary,
+    marginTop: Theme.spacing.sm,
+    lineHeight: Theme.typography.lineHeights.body,
+    fontSize: Theme.typography.sizes.body,
+  },
+  buttonRow: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: Theme.spacing.sm,
+    marginTop: Theme.spacing.lg,
+  },
+  cancelButton: {
+    backgroundColor: Theme.colors.light.disabled,
+    borderRadius: Theme.borderRadius.sm,
+    paddingVertical: Theme.spacing.sm,
+    paddingHorizontal: Theme.spacing.md,
+  },
+  cancelButtonText: {
+    color: Theme.colors.light.text,
+    fontWeight: Theme.typography.weights.bold,
+  },
+  confirmButton: {
+    borderRadius: Theme.borderRadius.sm,
+    paddingVertical: Theme.spacing.sm,
+    paddingHorizontal: Theme.spacing.md,
+  },
+  confirmButtonText: {
+    color: '#ffffff',
+    fontWeight: Theme.typography.weights.bold,
+  },
+});

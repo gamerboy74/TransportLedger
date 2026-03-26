@@ -2,16 +2,17 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, TextInput,
-  RefreshControl, Modal, StyleSheet, Alert,
+  RefreshControl, Modal, StyleSheet, Alert, FlatList, ActivityIndicator
 } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient, useInfiniteQuery, InfiniteData } from '@tanstack/react-query';
 import { Swipeable } from 'react-native-gesture-handler';
 import ThemedDateField from '../components/ThemedDateField';
 import { SkeletonBlock, SkeletonCard } from '../components/Skeleton';
 import { useThemedNotice } from '../components/ThemedNoticeProvider';
+import { ThemedTextInput } from '../components/ThemedTextInput';
 import {
   getTransportOwners,
   getVehiclesByOwnerIds,
@@ -91,17 +92,27 @@ export default function ChallanLogsScreen() {
   // getChallanEntriesByVehicleIds fires one .in('vehicle_id', ids) round-trip
   const CHALLAN_QK = ['challanLogs', month, vehicleIdsKey] as const;
   const {
-    data: entries = [],
+    data: infiniteData,
     isLoading: logsLoading,
     isFetching,
+    isFetchingNextPage,
+    fetchNextPage,
+    hasNextPage,
     refetch: refetchLogs,
-  } = useQuery({
+  } = useInfiniteQuery({
     queryKey: CHALLAN_QK,
-    queryFn: () => getChallanEntriesByVehicleIds(scopedVehicleIds, month),
+    queryFn: ({ pageParam = 0 }) => getChallanEntriesByVehicleIds(scopedVehicleIds, month, { page: pageParam as number, pageSize: 50 }),
+    getNextPageParam: (lastPage, allPages) => lastPage.length === 50 ? allPages.length : undefined,
+    initialPageParam: 0,
     enabled: scopedVehicleIds.length > 0,
     staleTime: 30_000,        // treat data fresh for 30s — no refetch on tab focus
     refetchInterval: 120_000, // silent background refresh every 2 min
   });
+
+  const entries = useMemo(() => {
+    if (!infiniteData) return [];
+    return infiniteData.pages.flat();
+  }, [infiniteData]);
 
   const loading = ownersLoading || vehiclesLoading || logsLoading;
 
@@ -143,9 +154,10 @@ export default function ChallanLogsScreen() {
         text: 'Delete', style: 'destructive', onPress: async () => {
           setDeletingId(entry.id);
           // Optimistic remove from cache immediately
-          queryClient.setQueryData<ChallanEntry[]>(CHALLAN_QK, (prev = []) =>
-            prev.filter(e => e.id !== entry.id)
-          );
+          queryClient.setQueryData<InfiniteData<ChallanEntry[]>>(CHALLAN_QK, (prev) => {
+            if (!prev) return prev;
+            return { ...prev, pages: prev.pages.map(page => page.filter(e => e.id !== entry.id)) };
+          });
           try {
             await deleteChallanEntry(entry.id);
           } catch (err) {
@@ -191,83 +203,100 @@ export default function ChallanLogsScreen() {
         </TouchableOpacity>
       </View>
 
-      <ScrollView
+      <FlatList
         style={s.scroll}
-        refreshControl={<RefreshControl refreshing={isFetching && !loading} onRefresh={() => void refetchLogs()} tintColor="#ec4899" />}
+        data={displayEntries}
+        keyExtractor={(item) => item.id}
+        initialNumToRender={10}
+        maxToRenderPerBatch={10}
+        windowSize={5}
+        onEndReached={() => {
+          if (hasNextPage && !isFetchingNextPage) void fetchNextPage();
+        }}
+        onEndReachedThreshold={0.5}
+        refreshControl={<RefreshControl refreshing={isFetching && !isFetchingNextPage && !loading} onRefresh={() => void refetchLogs()} tintColor="#ec4899" />}
         showsVerticalScrollIndicator={false}
-      >
-        {/* Owner filter chips */}
-        <Text style={s.filterLabel}>Transport Owner</Text>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.chipRow}>
-          <Chip text="All" active={!selectedOwnerId} onPress={() => { setSelectedOwnerId(null); setSelectedVehicleId(null); }} />
-          {owners.map(o => (
-            <Chip key={o.id} text={o.name} active={selectedOwnerId === o.id} onPress={() => { setSelectedOwnerId(o.id); setSelectedVehicleId(null); }} />
-          ))}
-        </ScrollView>
-
-        {/* Vehicle filter chips */}
-        <Text style={s.filterLabel}>Vehicle</Text>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.chipRow}>
-          <Chip text="All" active={!selectedVehicleId} onPress={() => setSelectedVehicleId(null)} />
-          {ownerVehicles.map(v => (
-            <Chip key={v.id} text={v.reg_number} active={selectedVehicleId === v.id} onPress={() => setSelectedVehicleId(v.id)} />
-          ))}
-        </ScrollView>
-
-        {/* Loading skeletons */}
-        {loading && (
+        ListHeaderComponent={
           <>
-            <SkeletonCard><SkeletonBlock style={{ width: '100%', height: 54, marginBottom: 8 }} /><SkeletonBlock style={{ width: '100%', height: 54 }} /></SkeletonCard>
-            <SkeletonCard><SkeletonBlock style={{ width: '100%', height: 54, marginBottom: 8 }} /><SkeletonBlock style={{ width: '100%', height: 54 }} /></SkeletonCard>
-          </>
-        )}
+            {/* Owner filter chips */}
+            <Text style={s.filterLabel}>Transport Owner</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.chipRow}>
+              <Chip text="All" active={!selectedOwnerId} onPress={() => { setSelectedOwnerId(null); setSelectedVehicleId(null); }} />
+              {owners.map(o => (
+                <Chip key={o.id} text={o.name} active={selectedOwnerId === o.id} onPress={() => { setSelectedOwnerId(o.id); setSelectedVehicleId(null); }} />
+              ))}
+            </ScrollView>
 
-        {!loading && (
-          <>
-            {/* Summary card */}
-            <View style={s.card}>
-              <Text style={s.cardSubLabel}>Month Total</Text>
-              <Text style={s.summaryTotal}>{(totalNetKg / 1000).toFixed(3)} T</Text>
-              <Text style={s.filterSummaryText}>
-                {totalTrips} trips · {displayEntries.reduce((s, e) => s + Number(e.gross_weight_kg ?? 0), 0).toLocaleString()} kg gross
-              </Text>
-            </View>
+            {/* Vehicle filter chips */}
+            <Text style={s.filterLabel}>Vehicle</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.chipRow}>
+              <Chip text="All" active={!selectedVehicleId} onPress={() => setSelectedVehicleId(null)} />
+              {ownerVehicles.map(v => (
+                <Chip key={v.id} text={v.reg_number} active={selectedVehicleId === v.id} onPress={() => setSelectedVehicleId(v.id)} />
+              ))}
+            </ScrollView>
 
-            {/* Entries list */}
-            <View style={s.entriesHeader}>
-              <Text style={s.entriesTitle}>Challan Entries</Text>
-              <Text style={s.swipeHint}>Swipe left for edit/delete</Text>
-            </View>
-
-            {displayEntries.length === 0 && (
-              <View style={s.emptyCard}>
-                <Text style={s.emptyCardTitle}>No challans found</Text>
-                <Text style={s.emptyCardSub}>Tap + to add a challan for this month.</Text>
-              </View>
+            {/* Loading skeletons */}
+            {loading && (
+              <>
+                <SkeletonCard><SkeletonBlock style={{ width: '100%', height: 54, marginBottom: 8 }} /><SkeletonBlock style={{ width: '100%', height: 54 }} /></SkeletonCard>
+                <SkeletonCard><SkeletonBlock style={{ width: '100%', height: 54, marginBottom: 8 }} /><SkeletonBlock style={{ width: '100%', height: 54 }} /></SkeletonCard>
+              </>
             )}
 
-            {displayEntries.map(entry => (
-              <ChallanCard
-                key={entry.id}
-                entry={entry}
-                vehicle={vehiclesById.get(entry.vehicle_id)}
-                isDeleting={deletingId === entry.id}
-                isOpen={openSwipeId === entry.id}
-                swipeRef={ref => { swipeRefs.current[entry.id] = ref; }}
-                onWillOpen={() => {
-                  if (openSwipeId && openSwipeId !== entry.id) swipeRefs.current[openSwipeId]?.close();
-                  setOpenSwipeId(entry.id);
-                }}
-                onSwipeClose={() => { if (openSwipeId === entry.id) setOpenSwipeId(null); }}
-                onEdit={() => { swipeRefs.current[entry.id]?.close(); setEditing(entry); }}
-                onDelete={() => { swipeRefs.current[entry.id]?.close(); handleDelete(entry); }}
-                onPress={() => { if (openSwipeId === entry.id) { swipeRefs.current[entry.id]?.close(); } else { setEditing(entry); } }}
-              />
-            ))}
+            {!loading && (
+              <>
+                {/* Summary card */}
+                <View style={s.card}>
+                  <Text style={s.cardSubLabel}>Month Total</Text>
+                  <Text style={s.summaryTotal}>{(totalNetKg / 1000).toFixed(3)} T</Text>
+                  <Text style={s.filterSummaryText}>
+                    {totalTrips} trips · {displayEntries.reduce((s, e) => s + Number(e.gross_weight_kg ?? 0), 0).toLocaleString()} kg gross
+                  </Text>
+                </View>
+
+                {/* Entries list */}
+                <View style={s.entriesHeader}>
+                  <Text style={s.entriesTitle}>Challan Entries</Text>
+                  <Text style={s.swipeHint}>Swipe left for edit/delete</Text>
+                </View>
+              </>
+            )}
           </>
+        }
+        ListEmptyComponent={
+          !loading && displayEntries.length === 0 ? (
+            <View style={s.emptyCard}>
+              <Text style={s.emptyCardTitle}>No challans found</Text>
+              <Text style={s.emptyCardSub}>Tap + to add a challan for this month.</Text>
+            </View>
+          ) : null
+        }
+        renderItem={({ item: entry }) => (
+          !loading ? (
+            <ChallanCard
+              entry={entry}
+              vehicle={vehiclesById.get(entry.vehicle_id)}
+              isDeleting={deletingId === entry.id}
+              isOpen={openSwipeId === entry.id}
+              swipeRef={ref => { swipeRefs.current[entry.id] = ref; }}
+              onWillOpen={() => {
+                if (openSwipeId && openSwipeId !== entry.id) swipeRefs.current[openSwipeId]?.close();
+                setOpenSwipeId(entry.id);
+              }}
+              onSwipeClose={() => { if (openSwipeId === entry.id) setOpenSwipeId(null); }}
+              onEdit={() => { swipeRefs.current[entry.id]?.close(); setEditing(entry); }}
+              onDelete={() => { swipeRefs.current[entry.id]?.close(); handleDelete(entry); }}
+              onPress={() => { if (openSwipeId === entry.id) { swipeRefs.current[entry.id]?.close(); } else { setEditing(entry); } }}
+            />
+          ) : null
         )}
-        <View style={{ height: 32 }} />
-      </ScrollView>
+        ListFooterComponent={
+          <View style={{ height: 48, justifyContent: 'center', alignItems: 'center' }}>
+            {isFetchingNextPage && <ActivityIndicator color="#ec4899" />}
+          </View>
+        }
+      />
 
       {/* Edit modal */}
       {!!editing && (
@@ -275,10 +304,13 @@ export default function ChallanLogsScreen() {
           entry={editing}
           onClose={() => setEditing(null)}
           onSaved={updated => {
-            queryClient.setQueryData<ChallanEntry[]>(CHALLAN_QK, (prev = []) =>
-              prev.map(e => e.id === updated.id ? updated : e)
-                .sort((a: ChallanEntry, b: ChallanEntry) => b.trip_date.localeCompare(a.trip_date))
-            );
+            queryClient.setQueryData<InfiniteData<ChallanEntry[]>>(CHALLAN_QK, (prev) => {
+              if (!prev) return prev;
+              return {
+                ...prev,
+                pages: prev.pages.map(page => page.map(e => e.id === updated.id ? updated : e).sort((a,b) => b.trip_date.localeCompare(a.trip_date)))
+              };
+            });
             setEditing(null);
           }}
         />
@@ -292,9 +324,14 @@ export default function ChallanLogsScreen() {
           month={month}
           onClose={() => setShowAdd(false)}
           onSaved={entry => {
-            queryClient.setQueryData<ChallanEntry[]>(CHALLAN_QK, (prev = []) =>
-              [entry, ...prev].sort((a: ChallanEntry, b: ChallanEntry) => b.trip_date.localeCompare(a.trip_date))
-            );
+            queryClient.setQueryData<InfiniteData<ChallanEntry[]>>(CHALLAN_QK, (prev) => {
+              if (!prev) return prev;
+              const newPages = [...prev.pages];
+              if (newPages.length > 0) {
+                newPages[0] = [entry, ...newPages[0]].sort((a,b) => b.trip_date.localeCompare(a.trip_date));
+              }
+              return { ...prev, pages: newPages };
+            });
             setShowAdd(false);
           }}
         />
@@ -308,7 +345,7 @@ export default function ChallanLogsScreen() {
 
 // ─── ChallanCard ──────────────────────────────────────────────
 
-function ChallanCard({ entry, vehicle, isDeleting, swipeRef, onWillOpen, onSwipeClose, onEdit, onDelete, onPress }: {
+const ChallanCard = React.memo(function ChallanCard({ entry, vehicle, isDeleting, isOpen, swipeRef, onWillOpen, onSwipeClose, onEdit, onDelete, onPress }: {
   entry: ChallanEntry;
   vehicle: Vehicle | undefined;
   isDeleting: boolean;
@@ -359,7 +396,7 @@ function ChallanCard({ entry, vehicle, isDeleting, swipeRef, onWillOpen, onSwipe
       </TouchableOpacity>
     </Swipeable>
   );
-}
+});
 
 // ─── Edit Modal ───────────────────────────────────────────────
 
@@ -419,12 +456,12 @@ function ChallanEditModal({ entry, onClose, onSaved }: {
         </View>
         <ScrollView keyboardShouldPersistTaps="handled">
           <ThemedDateField label="Date" value={date} onChange={setDate} required />
-          <MF label="Challan No" value={challanNo} onChange={setChallanNo} placeholder="e.g. C92501775/877" />
+          <ThemedTextInput label="Challan No" value={challanNo} onChangeText={setChallanNo} placeholder="e.g. C92501775/877" />
           <View style={{ flexDirection: 'row', gap: 8, marginBottom: 14 }}>
-            <View style={{ flex: 1 }}><MF label="Gross (kg)" value={grossKg} onChange={handleGross} kb="decimal-pad" /></View>
-            <View style={{ flex: 1 }}><MF label="Tare (kg)"  value={tareKg}  onChange={handleTare}  kb="decimal-pad" /></View>
+            <View style={{ flex: 1 }}><ThemedTextInput label="Gross (kg)" value={grossKg} onChangeText={handleGross} keyboardType="decimal-pad" /></View>
+            <View style={{ flex: 1 }}><ThemedTextInput label="Tare (kg)"  value={tareKg}  onChangeText={handleTare}  keyboardType="decimal-pad" /></View>
           </View>
-          <MF label="Net Weight (kg) *" value={netKg} onChange={setNetKg} kb="decimal-pad" />
+          <ThemedTextInput label="Net Weight (kg) *" value={netKg} onChangeText={setNetKg} keyboardType="decimal-pad" />
           {!!netKg && !isNaN(parseFloat(netKg)) && (
             <View style={{ backgroundColor: '#fff7fb', borderColor: '#f2d7e6', borderWidth: 1, borderRadius: 12, padding: 12, marginBottom: 12 }}>
               <Text style={{ color: '#6b5c67', fontSize: 12 }}>Net in tonnes</Text>
@@ -495,12 +532,12 @@ function ChallanAddModal({ vehicleId, vehicle, month, onClose, onSaved }: {
         </View>
         <ScrollView keyboardShouldPersistTaps="handled">
           <ThemedDateField label="Date" value={date} onChange={setDate} required />
-          <MF label="Challan No" value={challanNo} onChange={setChallanNo} placeholder="e.g. C92501775/877" />
+          <ThemedTextInput label="Challan No" value={challanNo} onChangeText={setChallanNo} placeholder="e.g. C92501775/877" />
           <View style={{ flexDirection: 'row', gap: 8, marginBottom: 14 }}>
-            <View style={{ flex: 1 }}><MF label="Gross (kg)" value={grossKg} onChange={handleGross} kb="decimal-pad" /></View>
-            <View style={{ flex: 1 }}><MF label="Tare (kg)"  value={tareKg}  onChange={handleTare}  kb="decimal-pad" /></View>
+            <View style={{ flex: 1 }}><ThemedTextInput label="Gross (kg)" value={grossKg} onChangeText={handleGross} keyboardType="decimal-pad" /></View>
+            <View style={{ flex: 1 }}><ThemedTextInput label="Tare (kg)"  value={tareKg}  onChangeText={handleTare}  keyboardType="decimal-pad" /></View>
           </View>
-          <MF label="Net Weight (kg) *" value={netKg} onChange={setNetKg} kb="decimal-pad" />
+          <ThemedTextInput label="Net Weight (kg) *" value={netKg} onChangeText={setNetKg} keyboardType="decimal-pad" />
           {!!netKg && !isNaN(parseFloat(netKg)) && parseFloat(netKg) > 0 && (
             <View style={{ backgroundColor: '#fff7fb', borderColor: '#f2d7e6', borderWidth: 1, borderRadius: 12, padding: 12, marginBottom: 12 }}>
               <Text style={{ color: '#6b5c67', fontSize: 12 }}>Net in tonnes</Text>
@@ -520,20 +557,7 @@ function ChallanAddModal({ vehicleId, vehicle, month, onClose, onSaved }: {
   );
 }
 
-// ─── Shared field component ───────────────────────────────────
 
-function MF({ label, value, onChange, placeholder, kb = 'default' }: { label: string; value: string; onChange: (v: string) => void; placeholder?: string; kb?: any }) {
-  return (
-    <View style={{ marginBottom: 16 }}>
-      <Text style={{ color: '#6b5c67', fontSize: 11, fontWeight: '600', marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.6 }}>{label}</Text>
-      <TextInput
-        style={{ backgroundColor: '#ffffff', borderColor: '#f2d7e6', borderWidth: 1, color: '#111111', borderRadius: 12, padding: 14 }}
-        value={value} onChangeText={onChange} placeholder={placeholder ?? '—'}
-        placeholderTextColor="#9f8b97" keyboardType={kb} autoCapitalize="characters"
-      />
-    </View>
-  );
-}
 
 // ─── Chip ─────────────────────────────────────────────────────
 

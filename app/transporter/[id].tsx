@@ -19,6 +19,7 @@ import {
 import { calculateSettlement } from '../../lib/calculations';
 import { fmt, fmtDate, monthKey, monthLabel, round2 } from '../../constants/defaults';
 import type { TransportOwner, Vehicle, Payment, TransportIncome } from '../../types';
+import { useAppStore } from '../../store/useAppStore';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -783,10 +784,12 @@ function PaymentModal({
           getVehiclePayments(vehicleId, month),
         ]);
         if (cancelled) return;
+        const { globalSettings } = useAppStore.getState();
         const settlement = calculateSettlement({
           trips, diesel,
           commissionRate: effectiveCommissionRate,
           accidentalRate: effectiveAccidentalRate,
+          tdsRate: globalSettings.tds_rate,
           gstEntries: gst,
           otherDeductions: others,
         });

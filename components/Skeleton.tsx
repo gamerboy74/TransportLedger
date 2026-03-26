@@ -1,5 +1,6 @@
 import { useEffect, useRef, type ReactNode } from 'react';
-import { Animated, Easing, View, type ViewStyle } from 'react-native';
+import { Animated, Easing, View, StyleSheet, type ViewStyle } from 'react-native';
+import { Theme } from '../constants/theme';
 
 export function SkeletonBlock({ style }: { style?: ViewStyle }) {
   const shimmer = useRef(new Animated.Value(0)).current;
@@ -10,7 +11,7 @@ export function SkeletonBlock({ style }: { style?: ViewStyle }) {
         toValue: 1,
         duration: 1100,
         easing: Easing.inOut(Easing.ease),
-        useNativeDriver: false,
+        useNativeDriver: true,
       })
     );
     loop.start();
@@ -25,11 +26,8 @@ export function SkeletonBlock({ style }: { style?: ViewStyle }) {
   return (
     <Animated.View
       style={[
-        {
-          backgroundColor: '#f4dbe8',
-          borderRadius: 12,
-          opacity,
-        },
+        styles.skeletonBlock,
+        { opacity },
         style,
       ]}
     />
@@ -38,17 +36,23 @@ export function SkeletonBlock({ style }: { style?: ViewStyle }) {
 
 export function SkeletonCard({ children }: { children: ReactNode }) {
   return (
-    <View
-      style={{
-        backgroundColor: '#ffffffcc',
-        borderColor: '#f2d7e6',
-        borderWidth: 1,
-        borderRadius: 16,
-        padding: 14,
-        marginBottom: 10,
-      }}
-    >
+    <View style={styles.skeletonCard}>
       {children}
     </View>
   );
 }
+
+const styles = StyleSheet.create({
+  skeletonBlock: {
+    backgroundColor: Theme.colors.light.disabled,
+    borderRadius: Theme.borderRadius.md,
+  },
+  skeletonCard: {
+    backgroundColor: Theme.colors.light.background,
+    borderColor: Theme.colors.light.border,
+    borderWidth: 1,
+    borderRadius: Theme.borderRadius.lg,
+    padding: Theme.spacing.md,
+    marginBottom: Theme.spacing.sm,
+  },
+});

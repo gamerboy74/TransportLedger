@@ -7,6 +7,7 @@ type OfflineActionType =
   | 'upsertVehicle'
   | 'upsertRoute'
   | 'addTripEntry'
+  | 'updateTripEntry'
   | 'deleteTripEntry'
   | 'addDieselLog'
   | 'updateDieselLog'
@@ -43,6 +44,7 @@ const DEDUPABLE_TYPES = new Set<OfflineActionType>([
   'upsertTransportOwner',
   'upsertVehicle',
   'upsertRoute',
+  'updateTripEntry',
   'updateDieselLog',
   'softDeleteDieselLog',
   'deleteTripEntry',
@@ -155,6 +157,23 @@ async function processAction(action: OfflineAction): Promise<void> {
     return;
   }
 
+  if (action.type === 'updateTripEntry') {
+    const payload = action.payload;
+    const amount = round2(Number(payload.tonnes) * Number(payload.rate_snapshot));
+    const { error } = await supabase
+      .from('trip_entries')
+      .update({
+        route_id: payload.route_id,
+        month: payload.month,
+        tonnes: Number(payload.tonnes),
+        rate_snapshot: Number(payload.rate_snapshot),
+        amount,
+      })
+      .eq('id', payload.id);
+    if (error) throw error;
+    return;
+  }
+
   if (action.type === 'deleteTripEntry') {
     const { error } = await supabase.from('trip_entries').delete().eq('id', action.payload.id);
     if (error) throw error;
@@ -165,15 +184,17 @@ async function processAction(action: OfflineAction): Promise<void> {
     const payload = action.payload;
     const month = payload.date.substring(0, 7);
     const fortnight = getFortnight(payload.date);
-    const amount = round2(Number(payload.litres) * SELL_RATE);
-    const buy_amount = round2(Number(payload.litres) * BUY_RATE);
+    const sellRate = Number(payload.sell_rate ?? SELL_RATE);
+    const buyRate  = Number(payload.buy_rate ?? BUY_RATE);
+    const amount = round2(Number(payload.litres) * sellRate);
+    const buy_amount = round2(Number(payload.litres) * buyRate);
     const profit = round2(amount - buy_amount);
     const { error } = await supabase.from('diesel_logs').insert({
       ...payload,
       month,
       fortnight,
-      buy_rate: BUY_RATE,
-      sell_rate: SELL_RATE,
+      buy_rate: buyRate,
+      sell_rate: sellRate,
       amount,
       buy_amount,
       profit,
@@ -186,8 +207,10 @@ async function processAction(action: OfflineAction): Promise<void> {
     const payload = action.payload;
     const month = payload.date.substring(0, 7);
     const fortnight = getFortnight(payload.date);
-    const amount = round2(Number(payload.litres) * SELL_RATE);
-    const buy_amount = round2(Number(payload.litres) * BUY_RATE);
+    const sellRate = Number(payload.sell_rate ?? SELL_RATE);
+    const buyRate  = Number(payload.buy_rate ?? BUY_RATE);
+    const amount = round2(Number(payload.litres) * sellRate);
+    const buy_amount = round2(Number(payload.litres) * buyRate);
     const profit = round2(amount - buy_amount);
     const { error } = await supabase
       .from('diesel_logs')
@@ -196,8 +219,8 @@ async function processAction(action: OfflineAction): Promise<void> {
         month,
         fortnight,
         litres: Number(payload.litres),
-        buy_rate: BUY_RATE,
-        sell_rate: SELL_RATE,
+        buy_rate: buyRate,
+        sell_rate: sellRate,
         amount,
         buy_amount,
         profit,

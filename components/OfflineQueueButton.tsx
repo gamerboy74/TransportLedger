@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react';
-import { Pressable, Text, View } from 'react-native';
+import { useEffect, useState, memo } from 'react';
+import { Pressable, Text, View, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { getOfflineQueueSize, subscribeOfflineQueueEvents } from '../lib/offlineQueue';
+import { Theme } from '../constants/theme';
 
-export default function OfflineQueueButton() {
+function OfflineQueueButtonComponent() {
   const [count, setCount] = useState(0);
 
   useEffect(() => {
@@ -32,24 +33,50 @@ export default function OfflineQueueButton() {
   return (
     <Pressable
       onPress={() => router.push('/queue' as any)}
-      style={({ pressed }) => ({
-        width: 36,
-        height: 36,
-        borderRadius: 18,
-        backgroundColor: '#ffffff',
-        borderWidth: 1,
-        borderColor: '#f2d7e6',
-        alignItems: 'center',
-        justifyContent: 'center',
-        transform: [{ scale: pressed ? 0.96 : 1 }],
-      })}
+      style={({ pressed }) => [
+        styles.container,
+        { transform: [{ scale: pressed ? 0.96 : 1 }] },
+      ]}
+      accessibilityLabel={`Offline queue with ${count} items`}
     >
-      <Ionicons name="cloud-upload-outline" size={16} color="#111111" />
+      <Ionicons name="cloud-upload-outline" size={16} color={Theme.colors.light.text} />
       {count > 0 && (
-        <View style={{ position: 'absolute', right: -4, top: -4, minWidth: 16, height: 16, borderRadius: 8, backgroundColor: '#db2777', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 3 }}>
-          <Text style={{ color: 'white', fontSize: 9, fontWeight: '700' }}>{count > 99 ? '99+' : count}</Text>
+        <View style={styles.badge}>
+          <Text style={styles.badgeText}>{count > 99 ? '99+' : count}</Text>
         </View>
       )}
     </Pressable>
   );
 }
+
+export default memo(OfflineQueueButtonComponent);
+
+const styles = StyleSheet.create({
+  container: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: Theme.colors.light.background,
+    borderWidth: 1,
+    borderColor: Theme.colors.light.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  badge: {
+    position: 'absolute',
+    right: -4,
+    top: -4,
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: Theme.colors.light.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 3,
+  },
+  badgeText: {
+    color: 'white',
+    fontSize: 9,
+    fontWeight: Theme.typography.weights.bold,
+  },
+});

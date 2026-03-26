@@ -1,8 +1,8 @@
 // lib/queries.ts — All database operations via Supabase
 import { supabase } from './supabase';
-import { round2, BUY_RATE, SELL_RATE, getFortnight, monthKey } from '../constants/defaults';
+import { round2, getFortnight, monthKey } from '../constants/defaults';
 import { runWriteThroughQueue } from './offlineQueue';
-import type { TransportOwner, Vehicle, Route, TripEntry, DieselLog, GSTEntry, OtherDeduction, TransportIncome, Payment } from '../types';
+import type { TransportOwner, Vehicle, Route, TripEntry, DieselLog, GSTEntry, OtherDeduction, TransportIncome, Payment, GlobalSettings } from '../types';
 
 function tempId() {
   return `queued-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -190,6 +190,31 @@ export async function getTripEntriesByVehicleIds(vehicleIds: string[], month: st
   return data ?? [];
 }
 
+export async function getTripEntriesByVehicleIdsDetail(
+  vehicleIds: string[],
+  month: string,
+  opts?: { page?: number; pageSize?: number }
+): Promise<TripEntry[]> {
+  if (!vehicleIds.length) return [];
+  let query = supabase
+    .from('trip_entries')
+    .select('id,vehicle_id,route_id,month,tonnes,rate_snapshot,amount,created_at,routes(name)')
+    .in('vehicle_id', vehicleIds)
+    .eq('month', month)
+    .order('created_at', { ascending: false });
+
+  if (opts && opts.page !== undefined) {
+    const size = opts.pageSize || 50;
+    const from = opts.page * size;
+    const to = from + size - 1;
+    query = query.range(from, to);
+  }
+
+  const { data, error } = await query;
+  if (error) throw error;
+  return (data ?? []).map((t: any) => ({ ...t, route_name: t.routes?.name }));
+}
+
 export async function addTripEntry(data: { vehicle_id: string; route_id: string; month: string; tonnes: number; rate_snapshot: number }): Promise<TripEntry> {
   const amount = round2(data.tonnes * data.rate_snapshot);
   return runWriteThroughQueue(
@@ -210,6 +235,25 @@ export async function addTripEntry(data: { vehicle_id: string; route_id: string;
       amount,
       created_at: new Date().toISOString(),
     } as TripEntry,
+  );
+}
+
+export async function updateTripEntry(id: string, data: { route_id: string; month: string; tonnes: number; rate_snapshot: number }): Promise<TripEntry> {
+  const amount = round2(data.tonnes * data.rate_snapshot);
+  return runWriteThroughQueue(
+    'updateTripEntry',
+    { id, ...data },
+    async () => {
+      const { data: result, error } = await supabase
+        .from('trip_entries')
+        .update({ ...data, amount })
+        .eq('id', id)
+        .select()
+        .single();
+      if (error) throw error;
+      return result;
+    },
+    undefined, // Offline queue for updates usually returns what's given or handles it in processAction
   );
 }
 
@@ -250,24 +294,34 @@ export async function getDieselProfitsByVehicleIds(vehicleIds: string[], month: 
   return data ?? [];
 }
 
-export async function getDieselLogsByVehicleIds(vehicleIds: string[], month: string): Promise<DieselLog[]> {
+export async function getDieselLogsByVehicleIds(vehicleIds: string[], month: string, opts?: { page?: number; pageSize?: number }): Promise<DieselLog[]> {
   if (!vehicleIds.length) return [];
-  const { data, error } = await supabase
+  let query = supabase
     .from('diesel_logs')
     .select('id,vehicle_id,date,month,fortnight,litres,buy_rate,sell_rate,amount,buy_amount,profit,deleted_at,delete_reason,created_at')
     .in('vehicle_id', vehicleIds)
     .eq('month', month)
     .is('deleted_at', null)
-    .order('date', { ascending: false });
+    .order('date', { ascending: false })
+    .order('created_at', { ascending: false });
+
+  if (opts && opts.page !== undefined) {
+    const size = opts.pageSize || 50;
+    const from = opts.page * size;
+    const to = from + size - 1;
+    query = query.range(from, to);
+  }
+
+  const { data, error } = await query;
   if (error) throw error;
   return data ?? [];
 }
 
-export async function addDieselLog(data: { vehicle_id: string; date: string; litres: number }): Promise<DieselLog> {
+export async function addDieselLog(data: { vehicle_id: string; date: string; litres: number; buy_rate: number; sell_rate: number }): Promise<DieselLog> {
   const month     = data.date.substring(0, 7);
-  const fortnight = getFortnight(data.date);
-  const amount    = round2(data.litres * SELL_RATE);
-  const buy_amount = round2(data.litres * BUY_RATE);
+  const fortnight = getFortnight(data.date) as 1 | 2;
+  const amount    = round2(data.litres * data.sell_rate);
+  const buy_amount = round2(data.litres * data.buy_rate);
   const profit    = round2(amount - buy_amount);
   return runWriteThroughQueue(
     'addDieselLog',
@@ -275,7 +329,7 @@ export async function addDieselLog(data: { vehicle_id: string; date: string; lit
     async () => {
       const { data: result, error } = await supabase
         .from('diesel_logs')
-        .insert({ ...data, month, fortnight, buy_rate: BUY_RATE, sell_rate: SELL_RATE, amount, buy_amount, profit })
+        .insert({ ...data, month, fortnight, amount, buy_amount, profit })
         .select().single();
       if (error) throw error;
       return result;
@@ -287,8 +341,8 @@ export async function addDieselLog(data: { vehicle_id: string; date: string; lit
       month,
       fortnight,
       litres: data.litres,
-      buy_rate: BUY_RATE,
-      sell_rate: SELL_RATE,
+      buy_rate: data.buy_rate,
+      sell_rate: data.sell_rate,
       amount,
       buy_amount,
       profit,
@@ -299,11 +353,11 @@ export async function addDieselLog(data: { vehicle_id: string; date: string; lit
   );
 }
 
-export async function updateDieselLog(data: { id: string; date: string; litres: number }): Promise<void> {
+export async function updateDieselLog(data: { id: string; date: string; litres: number; buy_rate: number; sell_rate: number }): Promise<void> {
   const month = data.date.substring(0, 7);
-  const fortnight = getFortnight(data.date);
-  const amount = round2(data.litres * SELL_RATE);
-  const buy_amount = round2(data.litres * BUY_RATE);
+  const fortnight = getFortnight(data.date) as 1 | 2;
+  const amount = round2(data.litres * data.sell_rate);
+  const buy_amount = round2(data.litres * data.buy_rate);
   const profit = round2(amount - buy_amount);
 
   await runWriteThroughQueue(
@@ -317,8 +371,8 @@ export async function updateDieselLog(data: { id: string; date: string; litres: 
           month,
           fortnight,
           litres: data.litres,
-          buy_rate: BUY_RATE,
-          sell_rate: SELL_RATE,
+          buy_rate: data.buy_rate,
+          sell_rate: data.sell_rate,
           amount,
           buy_amount,
           profit,
@@ -586,9 +640,6 @@ export interface ChallanEntry {
   tr_no: string | null;
   challan_no: string | null;
   vehicle_no: string | null;
-  transporter: string | null;
-  destination: string | null;
-  source: string | null;
   tare_weight_kg: number | null;
   gross_weight_kg: number | null;
   net_weight_kg: number | null;
@@ -615,15 +666,25 @@ export async function getChallanEntries(vehicleId: string, month: string): Promi
 export async function getChallanEntriesByVehicleIds(
   vehicleIds: string[],
   month: string,
+  opts?: { page?: number; pageSize?: number }
 ): Promise<ChallanEntry[]> {
   if (vehicleIds.length === 0) return [];
-  const { data, error } = await supabase
+  let query = supabase
     .from('challan_entries')
     .select(CHALLAN_COLS)
     .in('vehicle_id', vehicleIds)
     .eq('month', month)
     .order('trip_date', { ascending: false })
     .order('created_at', { ascending: false });
+
+  if (opts && opts.page !== undefined) {
+    const size = opts.pageSize || 50;
+    const from = opts.page * size;
+    const to = from + size - 1;
+    query = query.range(from, to);
+  }
+
+  const { data, error } = await query;
   if (error) throw error;
   return (data ?? []) as unknown as ChallanEntry[];
 }
@@ -673,4 +734,36 @@ export async function deleteChallanEntry(id: string): Promise<void> {
   const { error } = await supabase.from('challan_entries').delete().eq('id', id);
   if (error) throw error;
 }
+// ── Global Settings ──────────────────────────────────────────
 
+export async function getGlobalSettings(): Promise<GlobalSettings> {
+  const { data, error } = await supabase
+    .from('global_settings')
+    .select('*')
+    .eq('id', '00000000-0000-0000-0000-000000000000')
+    .single();
+  
+  if (error) {
+    console.error('Error fetching settings:', error);
+    // Fallback to defaults from constants if DB fetch fails
+    return {
+      id: '00000000-0000-0000-0000-000000000000',
+      tds_rate: 0.0100,
+      diesel_buy_rate: 92.92,
+      diesel_sell_rate: 94.00,
+      updated_at: new Date().toISOString()
+    };
+  }
+  return data;
+}
+
+export async function updateGlobalSettings(patch: Partial<GlobalSettings>): Promise<GlobalSettings> {
+  const { data, error } = await supabase
+    .from('global_settings')
+    .update(patch)
+    .eq('id', '00000000-0000-0000-0000-000000000000')
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}

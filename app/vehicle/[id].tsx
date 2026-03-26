@@ -21,6 +21,7 @@ import {
 } from 'react-native';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
 import { useThemedNotice } from '../../components/ThemedNoticeProvider';
 import { SkeletonBlock, SkeletonCard } from '../../components/Skeleton';
 import ThemedDateField from '../../components/ThemedDateField';
@@ -41,6 +42,7 @@ import {
 } from '../../lib/queries';
 import { calculateAdminEarnings, calculateSettlement } from '../../lib/calculations';
 import { fmt, fmtDate, monthKey, monthLabel, round2 } from '../../constants/defaults';
+import { useAppStore } from '../../store/useAppStore';
 import type {
   AdminEarnings,
   DieselLog,
@@ -264,11 +266,13 @@ function useVehicleData(id: string | undefined, month: string): UseVehicleDataRe
       const effectiveCommissionRate = Number(v.commission_rate ?? o.commission_rate ?? 0);
       const effectiveAccidentalRate = Number(v.accidental_rate ?? o.accidental_rate ?? 0);
 
+      const { globalSettings } = useAppStore.getState();
       const s = calculateSettlement({
         trips: t,
         diesel: d,
         commissionRate: effectiveCommissionRate,
         accidentalRate: effectiveAccidentalRate,
+        tdsRate: globalSettings.tds_rate,
         gstEntries: g,
         otherDeductions: oth,
       });
@@ -276,8 +280,10 @@ function useVehicleData(id: string | undefined, month: string): UseVehicleDataRe
       const ae = calculateAdminEarnings({
         totalTonnes:    s.totalTonnes,
         commissionRate: effectiveCommissionRate,
-        diesel:         d as Parameters<typeof calculateAdminEarnings>[0]['diesel'],
-        gstEntries:     g as Parameters<typeof calculateAdminEarnings>[0]['gstEntries'],
+        diesel:         d,
+        gstEntries:     g,
+        buyRate:        globalSettings.diesel_buy_rate,
+        sellRate:       globalSettings.diesel_sell_rate,
       });
 
       const cacheEntry: VehicleScreenCacheEntry = {
@@ -551,13 +557,22 @@ export default function VehicleDetailScreen() {
         <View style={s.card}>
           <Text style={s.cardTitle}>📋 Settlement Breakdown</Text>
 
-          <SL>① WEIGHT EARNINGS</SL>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+  <SL>① WEIGHT EARNINGS</SL>
+  <TouchableOpacity onPress={() => router.push({ pathname: '/trip-history' as any, params: { vehicleId: id, month, ownerId: vehicle?.transport_owner_id } })}>
+    <Ionicons name="time-outline" size={18} color="#d9468f" />
+  </TouchableOpacity>
+</View>
           {tripRows}
           {trips.length === 0 && <Text style={s.emptyText}>No trips this month</Text>}
           <TRow label="GROSS EARNING" value={fmt(settlement.gross)} />
 
           <SL>② DEDUCTIONS</SL>
-          <Row label="TDS @ 1%" value={`− ${fmt(settlement.tds)}`} red />
+          <Row 
+            label={`TDS @ ${(useAppStore.getState().globalSettings.tds_rate * 100).toFixed(1)}%`} 
+            value={`− ${fmt(settlement.tds)}`} 
+            red 
+          />
           <Row
             label={`Commission (${settlement.totalTonnes}T × ₹${vehicle.commission_rate})`}
             value={`− ${fmt(settlement.commission)}`}

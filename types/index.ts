@@ -118,3 +118,11 @@ export interface AdminEarnings {
   gstCommission: number;
   totalEarnings: number;
 }
+
+export interface GlobalSettings {
+  id: string;
+  tds_rate: number;
+  diesel_buy_rate: number;
+  diesel_sell_rate: number;
+  updated_at: string;
+}

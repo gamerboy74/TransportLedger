@@ -168,6 +168,23 @@ CREATE TABLE IF NOT EXISTS challan_entries (
 
 ALTER TABLE challan_entries DISABLE ROW LEVEL SECURITY;
 
+-- ── App Configurations ─────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS global_settings (
+  id                UUID PRIMARY KEY DEFAULT '00000000-0000-0000-0000-000000000000'::uuid,
+  tds_rate          NUMERIC(5,4) NOT NULL DEFAULT 0.0100,
+  diesel_buy_rate   NUMERIC(10,2) NOT NULL DEFAULT 92.92,
+  diesel_sell_rate  NUMERIC(10,2) NOT NULL DEFAULT 94.00,
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Singleton record for global settings
+INSERT INTO global_settings (id, tds_rate, diesel_buy_rate, diesel_sell_rate)
+VALUES ('00000000-0000-0000-0000-000000000000', 0.0100, 92.92, 94.00)
+ON CONFLICT (id) DO NOTHING;
+
+ALTER TABLE global_settings DISABLE ROW LEVEL SECURITY;
+
 -- ── Indexes ───────────────────────────────────────────────────
 
 CREATE INDEX IF NOT EXISTS idx_trip_vehicle_month    ON trip_entries(vehicle_id, month);

@@ -1,17 +1,18 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, TextInput,
-  RefreshControl, Modal, Pressable, Vibration, StyleSheet,
+  RefreshControl, Modal, Pressable, Vibration, StyleSheet, FlatList, ActivityIndicator
 } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient, useInfiniteQuery, InfiniteData } from '@tanstack/react-query';
 import { Swipeable } from 'react-native-gesture-handler';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import ThemedDateField from '../components/ThemedDateField';
 import { SkeletonBlock, SkeletonCard } from '../components/Skeleton';
 import { useThemedNotice } from '../components/ThemedNoticeProvider';
+import { ThemedTextInput } from '../components/ThemedTextInput';
 import {
   getTransportOwners, getVehiclesByOwnerIds, getDieselLogsByVehicleIds,
   softDeleteDieselLog, updateDieselLog,
@@ -23,8 +24,9 @@ import {
   writeDieselInsights,
   type DieselInsightsCache,
 } from '../lib/dieselInsightsCache';
-import { BUY_RATE, getFortnight, monthKey, monthLabel, round2, SELL_RATE } from '../constants/defaults';
-import type { DieselLog, TransportOwner, Vehicle } from '../types';
+import { getFortnight, monthKey, monthLabel, round2, prevMonth, nextMonth } from '../constants/defaults';
+import { useAppStore } from '../store/useAppStore';
+import type { DieselLog, TransportOwner, Vehicle, Route, GlobalSettings } from '../types';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -47,18 +49,6 @@ const SWIPE_DRAG_OFFSET = 24;
 
 // ─── Pure helpers (defined outside component — never recreated) ───────────────
 
-function prevMonth(m: string): string {
-  const [y, mm] = m.split('-').map(Number);
-  const d = new Date(y, mm - 2, 1);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-}
-
-function nextMonth(m: string): string {
-  const [y, mm] = m.split('-').map(Number);
-  const d = new Date(y, mm, 1);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-}
-
 function sumAmount(logs: DieselLog[]): number {
   return round2(logs.reduce((s, l) => s + Number(l.amount || 0), 0));
 }
@@ -73,6 +63,7 @@ function sortLogs(a: DieselLog, b: DieselLog): number {
 // ─── Main Screen ──────────────────────────────────────────────────────────────
 
 export default function DieselLogsScreen() {
+  const { globalSettings } = useAppStore();
   const params = useLocalSearchParams<{ ownerId?: string; vehicleId?: string; month?: string }>();
   const notice = useThemedNotice();
   const queryClient = useQueryClient();
@@ -133,17 +124,27 @@ export default function DieselLogsScreen() {
   const vehicleIdsKey = useMemo(() => [...scopedVehicleIds].sort().join(','), [scopedVehicleIds]);
 
   const {
-    data: monthLogs = [],
+    data: infiniteData,
     isLoading: logsLoading,
     isFetching: logsFetching,
+    isFetchingNextPage: logsFetchingNextPage,
+    fetchNextPage: fetchNextLogsPage,
+    hasNextPage: hasNextLogsPage,
     error: logsError,
     refetch: refetchLogs,
-  } = useQuery({
+  } = useInfiniteQuery({
     queryKey: ['dieselLogsMonth', month, vehicleIdsKey],
-    queryFn: () => getDieselLogsByVehicleIds(scopedVehicleIds, month),
+    queryFn: ({ pageParam = 0 }) => getDieselLogsByVehicleIds(scopedVehicleIds, month, { page: pageParam as number, pageSize: 50 }),
+    getNextPageParam: (lastPage, allPages) => lastPage.length === 50 ? allPages.length : undefined,
+    initialPageParam: 0,
     enabled: scopedVehicleIds.length > 0,
     refetchInterval: 120_000,
   });
+
+  const monthLogs = useMemo(() => {
+    if (!infiniteData) return [];
+    return infiniteData.pages.flat();
+  }, [infiniteData]);
 
   const loading = ownersLoading || vehiclesLoading || logsLoading;
 
@@ -261,12 +262,17 @@ export default function DieselLogsScreen() {
       void queryClient.invalidateQueries({ queryKey: ['homeSummary', queryMonth] });
       void queryClient.invalidateQueries({ queryKey: ['transportersSummary', queryMonth] });
     } catch (e) {
-      queryClient.setQueryData<DieselLog[]>(
+      queryClient.setQueryData<InfiniteData<DieselLog[]>>(
         ['dieselLogsMonth', queryMonth, queryVehicleKey],
         (prev) => {
-          const list = prev ?? [];
-          if (list.some((x) => x.id === log.id)) return list;
-          return [log, ...list].sort(sortLogs);
+          if (!prev) return prev;
+          const newPages = [...prev.pages];
+          if (newPages.length > 0) {
+            if (!newPages[0].some((x) => x.id === log.id)) {
+              newPages[0] = [log, ...newPages[0]].sort(sortLogs);
+            }
+          }
+          return { ...prev, pages: newPages };
         }
       );
       notice.showError('Error', String(e));
@@ -281,9 +287,15 @@ export default function DieselLogsScreen() {
     const queryVehicleIdsKey = vehicleIdsKey;
     const expiresAt = Date.now() + 5000;
 
-    queryClient.setQueryData<DieselLog[]>(
+    queryClient.setQueryData<InfiniteData<DieselLog[]>>(
       ['dieselLogsMonth', queryMonth, queryVehicleIdsKey],
-      (prev) => (prev ?? []).filter((x) => x.id !== log.id)
+      (prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          pages: prev.pages.map(page => page.filter(x => x.id !== log.id))
+        };
+      }
     );
     void invalidateDieselInsightsForMonth(queryMonth);
     setUndoQueue((prev) => [...prev, { token, log, queryMonth, queryVehicleIdsKey, expiresAt }]);
@@ -308,12 +320,17 @@ export default function DieselLogsScreen() {
     }
 
     const restore = latest.log;
-    queryClient.setQueryData<DieselLog[]>(
+    queryClient.setQueryData<InfiniteData<DieselLog[]>>(
       ['dieselLogsMonth', latest.queryMonth, latest.queryVehicleIdsKey],
       (prev) => {
-        const list = prev ?? [];
-        if (list.some((x) => x.id === restore.id)) return list;
-        return [restore, ...list].sort(sortLogs);
+        if (!prev) return prev;
+        const newPages = [...prev.pages];
+        if (newPages.length > 0) {
+          if (!newPages[0].some((x) => x.id === restore.id)) {
+            newPages[0] = [restore, ...newPages[0]].sort(sortLogs);
+          }
+        }
+        return { ...prev, pages: newPages };
       }
     );
     void invalidateDieselInsightsForMonth(latest.queryMonth);
@@ -327,28 +344,33 @@ export default function DieselLogsScreen() {
     if (previous) {
       const updatedMonth   = updatedInput.date.substring(0, 7);
       const nextFortnight  = getFortnight(updatedInput.date) as 1 | 2;
-      const nextAmount     = round2(updatedInput.litres * SELL_RATE);
-      const nextBuyAmount  = round2(updatedInput.litres * BUY_RATE);
+      const nextAmount     = round2(updatedInput.litres * globalSettings.diesel_sell_rate);
+      const nextBuyAmount  = round2(updatedInput.litres * globalSettings.diesel_buy_rate);
       const nextProfit     = round2(nextAmount - nextBuyAmount);
-      queryClient.setQueryData<DieselLog[]>(['dieselLogsMonth', month, vehicleIdsKey], (prev) => {
-        const list = prev ?? [];
-        if (updatedMonth !== month) return list.filter((x) => x.id !== updatedInput.id);
-        return list.map((x) =>
-          x.id !== updatedInput.id
-            ? x
-            : {
-                ...x,
-                date: updatedInput.date,
-                month: updatedMonth,
-                fortnight: nextFortnight,
-                litres: updatedInput.litres,
-                buy_rate: BUY_RATE,
-                sell_rate: SELL_RATE,
-                amount: nextAmount,
-                buy_amount: nextBuyAmount,
-                profit: nextProfit,
-              }
-        );
+      queryClient.setQueryData<InfiniteData<DieselLog[]>>(['dieselLogsMonth', month, vehicleIdsKey], (prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          pages: prev.pages.map(page => {
+            if (updatedMonth !== month) return page.filter(x => x.id !== updatedInput.id);
+            return page.map(x =>
+              x.id !== updatedInput.id
+                ? x
+                : {
+                    ...x,
+                    date: updatedInput.date,
+                    month: updatedMonth,
+                    fortnight: nextFortnight,
+                    litres: updatedInput.litres,
+                    buy_rate: globalSettings.diesel_buy_rate,
+                    sell_rate: globalSettings.diesel_sell_rate,
+                    amount: nextAmount,
+                    buy_amount: nextBuyAmount,
+                    profit: nextProfit,
+                  }
+            );
+          })
+        };
       });
     }
     setEditing(null);
@@ -531,169 +553,188 @@ export default function DieselLogsScreen() {
         </TouchableOpacity>
       </View>
 
-      <ScrollView
+      <FlatList
         style={s.scroll}
+        data={displayLogs}
+        keyExtractor={(item) => item.id}
+        initialNumToRender={10}
+        maxToRenderPerBatch={10}
+        windowSize={5}
+        onEndReached={() => {
+          if (hasNextLogsPage && !logsFetchingNextPage) void fetchNextLogsPage();
+        }}
+        onEndReachedThreshold={0.5}
         refreshControl={
-          <RefreshControl refreshing={logsFetching && !loading} onRefresh={handleRefresh} tintColor="#ec4899" />
+          <RefreshControl refreshing={logsFetching && !logsFetchingNextPage && !loading} onRefresh={handleRefresh} tintColor="#ec4899" />
         }
         showsVerticalScrollIndicator={false}
-      >
-        {/* Owner filter */}
-        <Text style={s.filterLabel}>Transport Owner</Text>
-        {ownerSelectorCollapsed && selectedOwnerId ? (
-          <View style={s.collapsedOwnerRow}>
-            <View style={s.collapsedOwnerChip}>
-              <Chip text={ownersById.get(selectedOwnerId)?.name ?? 'Selected owner'} active onPress={() => {}} />
-            </View>
-            <TouchableOpacity onPress={expandOwnerSelector} style={s.changeBtn}>
-              <Text style={s.changeBtnText}>Change</Text>
-            </TouchableOpacity>
-          </View>
-        ) : (
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.chipRow}>
-            <Chip text="All" active={!selectedOwnerId} onPress={clearOwner} />
-            {owners.map((o) => (
-              <Chip key={o.id} text={o.name} active={selectedOwnerId === o.id} onPress={() => selectOwner(o.id)} />
-            ))}
-          </ScrollView>
-        )}
-
-        {/* Vehicle filter */}
-        <Text style={s.filterLabel}>Vehicle</Text>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.chipRow}>
-          <Chip text="All" active={!selectedVehicleId} onPress={() => setSelectedVehicleId(null)} />
-          {ownerVehicles.map((v) => (
-            <Chip key={v.id} text={v.reg_number} active={selectedVehicleId === v.id} onPress={() => setSelectedVehicleId(v.id)} />
-          ))}
-        </ScrollView>
-
-        {/* Period filter */}
-        <Text style={s.filterLabel}>Date Split</Text>
-        <View style={s.periodRow}>
-          <Chip text="Full month" active={period === 'all'} onPress={() => setPeriod('all')} />
-          <Chip text="1-15"       active={period === '1'}   onPress={() => setPeriod('1')} />
-          <Chip text="16-end"     active={period === '2'}   onPress={() => setPeriod('2')} />
-        </View>
-
-        {/* Loading skeletons */}
-        {loading && (
+        ListHeaderComponent={
           <>
-            <SkeletonCard>
-              <SkeletonBlock style={{ width: 120, height: 12, marginBottom: 10 }} />
-              <SkeletonBlock style={{ width: '100%', height: 48, marginBottom: 8 }} />
-              <SkeletonBlock style={{ width: '100%', height: 48 }} />
-            </SkeletonCard>
-            <SkeletonCard>
-              <SkeletonBlock style={{ width: 140, height: 12, marginBottom: 10 }} />
-              <SkeletonBlock style={{ width: '100%', height: 54, marginBottom: 8 }} />
-              <SkeletonBlock style={{ width: '100%', height: 54 }} />
-            </SkeletonCard>
-          </>
-        )}
-
-        {(!loading || !!cachedInsights) && (
-          <>
-            {/* Summary card */}
-            <View style={s.card}>
-              <Text style={s.cardSubLabel}>Month Wise Distributed</Text>
-              <Text style={s.summaryTotal}>₹{effectiveInsights.monthTotal.toLocaleString('en-IN')}</Text>
-              <View style={s.halfRow}>
-                <View style={s.halfCard}>
-                  <Text style={s.halfLabel}>1-15</Text>
-                  <Text style={s.halfValue}>₹{effectiveInsights.half1Total.toLocaleString('en-IN')}</Text>
+            {/* Owner filter */}
+            <Text style={s.filterLabel}>Transport Owner</Text>
+            {ownerSelectorCollapsed && selectedOwnerId ? (
+              <View style={s.collapsedOwnerRow}>
+                <View style={s.collapsedOwnerChip}>
+                  <Chip text={ownersById.get(selectedOwnerId)?.name ?? 'Selected owner'} active onPress={() => {}} />
                 </View>
-                <View style={s.halfCard}>
-                  <Text style={s.halfLabel}>16-end</Text>
-                  <Text style={s.halfValue}>₹{effectiveInsights.half2Total.toLocaleString('en-IN')}</Text>
-                </View>
+                <TouchableOpacity onPress={expandOwnerSelector} style={s.changeBtn}>
+                  <Text style={s.changeBtnText}>Change</Text>
+                </TouchableOpacity>
               </View>
-              <Text style={s.filterSummaryText}>
-                Current filter total: ₹{effectiveInsights.currentTotal.toLocaleString('en-IN')} ({effectiveInsights.displayCount} logs)
-              </Text>
-              {!!cachedInsights && loading && (
-                <Text style={s.cachedNote}>Showing cached summary while refreshing...</Text>
-              )}
-            </View>
-
-            {/* Transport totals */}
-            <View style={s.card}>
-              <Text style={s.cardTitle}>Transport-wise Totals</Text>
-              {effectiveInsights.transportTotals.length === 0
-                ? <Text style={s.emptyText}>No data for this filter.</Text>
-                : effectiveInsights.transportTotals.map((t) => (
-                  <TotalRow key={t.name} primary={t.name} secondary={`${round2(t.litres).toLocaleString('en-IN')}L`} amount={round2(t.amount)} />
+            ) : (
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.chipRow}>
+                <Chip text="All" active={!selectedOwnerId} onPress={clearOwner} />
+                {owners.map((o) => (
+                  <Chip key={o.id} text={o.name} active={selectedOwnerId === o.id} onPress={() => selectOwner(o.id)} />
                 ))}
-            </View>
-
-            {/* Vehicle totals */}
-            <View style={s.card}>
-              <Text style={s.cardTitle}>Vehicle-wise Totals</Text>
-              {effectiveInsights.vehicleTotals.length === 0
-                ? <Text style={s.emptyText}>No data for this filter.</Text>
-                : effectiveInsights.vehicleTotals.map((t) => (
-                  <TotalRow
-                    key={`${t.owner}-${t.reg}`}
-                    primary={t.reg}
-                    secondary={`${t.owner} · ${round2(t.litres).toLocaleString('en-IN')}L`}
-                    amount={round2(t.amount)}
-                  />
-                ))}
-            </View>
-
-            {/* Diesel entries list */}
-            <View style={s.entriesHeader}>
-              <Text style={s.entriesTitle}>Diesel Entries</Text>
-              <Text style={s.swipeHint}>Swipe left for edit/delete</Text>
-            </View>
-            {displayLogs.length === 0 && (
-              <View style={s.emptyCard}>
-                <Text style={s.emptyCardTitle}>No diesel logs found</Text>
-                <Text style={s.emptyCardSub}>Try another month, owner, vehicle, or date split.</Text>
-              </View>
+              </ScrollView>
             )}
-            {displayLogs.map((log) => (
-              <DieselLogCard
-                key={log.id}
-                log={log}
-                vehicle={vehiclesById.get(log.vehicle_id)}
-                owner={ownersById.get(vehiclesById.get(log.vehicle_id)?.transport_owner_id ?? '')}
-                isDeleting={deletingId === log.id}
-                isOpen={openSwipeId === log.id}
-                swipeRef={(ref) => { swipeRefs.current[log.id] = ref; }}
-                onWillOpen={() => {
-                  if (openSwipeId && openSwipeId !== log.id) swipeRefs.current[openSwipeId]?.close();
-                  setOpenSwipeId(log.id);
-                  triggerHaptic();
-                }}
-                onSwipeClose={() => { if (openSwipeId === log.id) setOpenSwipeId(null); }}
-                onEdit={() => {
-                  triggerHaptic();
-                  swipeRefs.current[log.id]?.close();
-                  setEditing(log);
-                }}
-                onDelete={() => {
-                  triggerHaptic('strong');
-                  swipeRefs.current[log.id]?.close();
-                  void onDeleteLog(log);
-                }}
-                onPress={() => {
-                  triggerHaptic();
-                  if (openSwipeId === log.id) swipeRefs.current[log.id]?.close();
-                  setEditing(log);
-                }}
-              />
-            ))}
 
+            {/* Vehicle filter */}
+            <Text style={s.filterLabel}>Vehicle</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.chipRow}>
+              <Chip text="All" active={!selectedVehicleId} onPress={() => setSelectedVehicleId(null)} />
+              {ownerVehicles.map((v) => (
+                <Chip key={v.id} text={v.reg_number} active={selectedVehicleId === v.id} onPress={() => setSelectedVehicleId(v.id)} />
+              ))}
+            </ScrollView>
+
+            {/* Period filter */}
+            <Text style={s.filterLabel}>Date Split</Text>
+            <View style={s.periodRow}>
+              <Chip text="Full month" active={period === 'all'} onPress={() => setPeriod('all')} />
+              <Chip text="1-15"       active={period === '1'}   onPress={() => setPeriod('1')} />
+              <Chip text="16-end"     active={period === '2'}   onPress={() => setPeriod('2')} />
+            </View>
+
+            {/* Loading skeletons */}
+            {loading && (
+              <>
+                <SkeletonCard>
+                  <SkeletonBlock style={{ width: 120, height: 12, marginBottom: 10 }} />
+                  <SkeletonBlock style={{ width: '100%', height: 48, marginBottom: 8 }} />
+                  <SkeletonBlock style={{ width: '100%', height: 48 }} />
+                </SkeletonCard>
+                <SkeletonCard>
+                  <SkeletonBlock style={{ width: 140, height: 12, marginBottom: 10 }} />
+                  <SkeletonBlock style={{ width: '100%', height: 54, marginBottom: 8 }} />
+                  <SkeletonBlock style={{ width: '100%', height: 54 }} />
+                </SkeletonCard>
+              </>
+            )}
+
+            {(!loading || !!cachedInsights) && (
+              <>
+                {/* Summary card */}
+                <View style={s.card}>
+                  <Text style={s.cardSubLabel}>Month Wise Distributed</Text>
+                  <Text style={s.summaryTotal}>₹{effectiveInsights.monthTotal.toLocaleString('en-IN')}</Text>
+                  <View style={s.halfRow}>
+                    <View style={s.halfCard}>
+                      <Text style={s.halfLabel}>1-15</Text>
+                      <Text style={s.halfValue}>₹{effectiveInsights.half1Total.toLocaleString('en-IN')}</Text>
+                    </View>
+                    <View style={s.halfCard}>
+                      <Text style={s.halfLabel}>16-end</Text>
+                      <Text style={s.halfValue}>₹{effectiveInsights.half2Total.toLocaleString('en-IN')}</Text>
+                    </View>
+                  </View>
+                  <Text style={s.filterSummaryText}>
+                    Current filter total: ₹{effectiveInsights.currentTotal.toLocaleString('en-IN')} ({effectiveInsights.displayCount} logs)
+                  </Text>
+                  {!!cachedInsights && loading && (
+                    <Text style={s.cachedNote}>Showing cached summary while refreshing...</Text>
+                  )}
+                </View>
+
+                {/* Transport totals */}
+                <View style={s.card}>
+                  <Text style={s.cardTitle}>Transport-wise Totals</Text>
+                  {effectiveInsights.transportTotals.length === 0
+                    ? <Text style={s.emptyText}>No data for this filter.</Text>
+                    : effectiveInsights.transportTotals.map((t) => (
+                      <TotalRow key={t.name} primary={t.name} secondary={`${round2(t.litres).toLocaleString('en-IN')}L`} amount={round2(t.amount)} />
+                    ))}
+                </View>
+
+                {/* Vehicle totals */}
+                <View style={s.card}>
+                  <Text style={s.cardTitle}>Vehicle-wise Totals</Text>
+                  {effectiveInsights.vehicleTotals.length === 0
+                    ? <Text style={s.emptyText}>No data for this filter.</Text>
+                    : effectiveInsights.vehicleTotals.map((t) => (
+                      <TotalRow
+                        key={`${t.owner}-${t.reg}`}
+                        primary={t.reg}
+                        secondary={`${t.owner} · ${round2(t.litres).toLocaleString('en-IN')}L`}
+                        amount={round2(t.amount)}
+                      />
+                    ))}
+                </View>
+
+                {/* Diesel entries list */}
+                <View style={s.entriesHeader}>
+                  <Text style={s.entriesTitle}>Diesel Entries</Text>
+                  <Text style={s.swipeHint}>Swipe left for edit/delete</Text>
+                </View>
+              </>
+            )}
           </>
+        }
+        ListEmptyComponent={
+          (!loading || !!cachedInsights) && displayLogs.length === 0 ? (
+            <View style={s.emptyCard}>
+              <Text style={s.emptyCardTitle}>No diesel logs found</Text>
+              <Text style={s.emptyCardSub}>Try another month, owner, vehicle, or date split.</Text>
+            </View>
+          ) : null
+        }
+        renderItem={({ item: log }) => (
+          (!loading || !!cachedInsights) ? (
+            <DieselLogCard
+              log={log}
+              vehicle={vehiclesById.get(log.vehicle_id)}
+              owner={ownersById.get(vehiclesById.get(log.vehicle_id)?.transport_owner_id ?? '')}
+              isDeleting={deletingId === log.id}
+              isOpen={openSwipeId === log.id}
+              swipeRef={(ref) => { swipeRefs.current[log.id] = ref; }}
+              onWillOpen={() => {
+                if (openSwipeId && openSwipeId !== log.id) swipeRefs.current[openSwipeId]?.close();
+                setOpenSwipeId(log.id);
+                triggerHaptic();
+              }}
+              onSwipeClose={() => { if (openSwipeId === log.id) setOpenSwipeId(null); }}
+              onEdit={() => {
+                triggerHaptic();
+                swipeRefs.current[log.id]?.close();
+                setEditing(log);
+              }}
+              onDelete={() => {
+                triggerHaptic('strong');
+                swipeRefs.current[log.id]?.close();
+                void onDeleteLog(log);
+              }}
+              onPress={() => {
+                triggerHaptic();
+                if (openSwipeId === log.id) swipeRefs.current[log.id]?.close();
+                setEditing(log);
+              }}
+            />
+          ) : null
         )}
-
-        <View style={{ height: 32 }} />
-      </ScrollView>
+        ListFooterComponent={
+          <View style={{ height: 48, justifyContent: 'center', alignItems: 'center' }}>
+            {logsFetchingNextPage && <ActivityIndicator color="#ec4899" />}
+          </View>
+        }
+      />
 
       {/* Edit modal — conditionally mounted */}
       {!!editing && (
         <EditDieselLogModal
           log={editing}
+          sellRate={globalSettings.diesel_sell_rate}
+          buyRate={globalSettings.diesel_buy_rate}
           onClose={closeEditing}
           onSaved={handleEditSaved}
         />
@@ -824,11 +865,13 @@ const Chip = React.memo(function Chip({ text, active, onPress, accessibilityLabe
 
 interface EditDieselLogModalProps {
   log: DieselLog | null;
+  sellRate: number;
+  buyRate: number;
   onClose: () => void;
   onSaved: (updated: { id: string; date: string; litres: number }) => Promise<void>;
 }
 
-function EditDieselLogModal({ log, onClose, onSaved }: EditDieselLogModalProps) {
+function EditDieselLogModal({ log, sellRate, buyRate, onClose, onSaved }: EditDieselLogModalProps) {
   const [date, setDate]     = useState('');
   const [litres, setLitres] = useState('');
   const [saving, setSaving] = useState(false);
@@ -849,7 +892,7 @@ function EditDieselLogModal({ log, onClose, onSaved }: EditDieselLogModalProps) 
     }
     setSaving(true);
     try {
-      await updateDieselLog({ id: log.id, date, litres: l });
+      await updateDieselLog({ id: log.id, date, litres: l, buy_rate: buyRate, sell_rate: sellRate });
       await appendActivityEvent({ entity: 'diesel_log', action: 'edited', label: date, details: `${round2(l)}L` });
       notice.showSuccess('Saved', 'Diesel log updated.');
       await onSaved({ id: log.id, date, litres: l });
@@ -861,8 +904,8 @@ function EditDieselLogModal({ log, onClose, onSaved }: EditDieselLogModalProps) 
   }, [log, date, litres, onSaved, notice]);
 
   const amount = useMemo(
-    () => !Number.isNaN(parseFloat(litres)) ? round2(parseFloat(litres) * SELL_RATE) : 0,
-    [litres]
+    () => !Number.isNaN(parseFloat(litres)) ? round2(parseFloat(litres) * sellRate) : 0,
+    [litres, sellRate]
   );
 
   return (
@@ -876,20 +919,16 @@ function EditDieselLogModal({ log, onClose, onSaved }: EditDieselLogModalProps) 
 
           <ThemedDateField label="Date" value={date} onChange={setDate} required />
 
-          <View style={{ marginBottom: 12 }}>
-            <Text style={s.fieldLabel}>Litres</Text>
-            <TextInput
-              style={s.textInput}
-              keyboardType="decimal-pad"
-              value={litres}
-              onChangeText={setLitres}
-              placeholder="e.g. 207.76"
-              placeholderTextColor="#9f8b97"
-            />
-          </View>
+          <ThemedTextInput
+            label="Litres"
+            keyboardType="decimal-pad"
+            value={litres}
+            onChangeText={setLitres}
+            placeholder="e.g. 207.76"
+          />
 
           <View style={s.amountPreview}>
-            <Text style={s.amountPreviewLabel}>Distributed amount at ₹94/L</Text>
+            <Text style={s.amountPreviewLabel}>Distributed amount at ₹{sellRate}/L</Text>
             <Text style={s.amountPreviewValue}>₹{amount.toLocaleString('en-IN')}</Text>
           </View>
 

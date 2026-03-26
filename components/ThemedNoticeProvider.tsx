@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { Modal, Pressable, Text, TouchableOpacity, View } from 'react-native';
+import { Modal, Pressable, Text, TouchableOpacity, View, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { Theme } from '../constants/theme';
 
 type NoticeTone = 'info' | 'error' | 'success';
 
@@ -36,9 +37,19 @@ export function ThemedNoticeProvider({ children }: { children: React.ReactNode }
     hide: () => setState((s) => ({ ...s, visible: false })),
   }), []);
 
-  const toneColor = state.tone === 'error' ? '#ef4444' : state.tone === 'success' ? '#16a34a' : '#d9468f';
+  const toneColor = useMemo(() => {
+    if (state.tone === 'error') return Theme.colors.light.error;
+    if (state.tone === 'success') return Theme.colors.light.success;
+    return Theme.colors.light.primary;
+  }, [state.tone]);
+
   const toneIcon = state.tone === 'error' ? 'close-circle' : state.tone === 'success' ? 'checkmark-circle' : 'information-circle';
-  const toneBg = state.tone === 'error' ? '#fee2e2' : state.tone === 'success' ? '#dcfce7' : '#fce7f3';
+  
+  const toneBg = useMemo(() => {
+    if (state.tone === 'error') return '#fee2e2'; // Light red (could move to Theme.colors.light.errorContainer)
+    if (state.tone === 'success') return '#dcfce7'; // Light green
+    return '#fce7f3'; // Light pink/info
+  }, [state.tone]);
 
   useEffect(() => {
     if (autoHideRef.current) {
@@ -64,19 +75,19 @@ export function ThemedNoticeProvider({ children }: { children: React.ReactNode }
     <NoticeContext.Provider value={api}>
       {children}
       <Modal visible={state.visible} transparent animationType="fade" onRequestClose={api.hide}>
-        <Pressable style={{ flex: 1, backgroundColor: '#00000055', justifyContent: 'center', padding: 18 }} onPress={api.hide}>
-          <Pressable onPress={(e) => e.stopPropagation()} style={{ backgroundColor: '#ffffffef', borderRadius: 18, borderWidth: 1, borderColor: '#f2d7e6', padding: 16 }}>
-            <View style={{ width: 34, height: 34, borderRadius: 17, backgroundColor: toneBg, alignItems: 'center', justifyContent: 'center', marginBottom: 10 }}>
+        <Pressable style={styles.overlay} onPress={api.hide}>
+          <Pressable onPress={(e) => e.stopPropagation()} style={styles.modalContainer}>
+            <View style={[styles.iconContainer, { backgroundColor: toneBg }]}>
               <Ionicons name={toneIcon} size={20} color={toneColor} />
             </View>
-            <Text style={{ color: '#111111', fontSize: 18, fontWeight: '800' }}>{state.title}</Text>
+            <Text style={styles.title}>{state.title}</Text>
             {!!state.message && (
-              <Text style={{ color: '#6b5c67', marginTop: 8, lineHeight: 20 }}>{state.message}</Text>
+              <Text style={styles.message}>{state.message}</Text>
             )}
             {state.tone !== 'success' && (
-              <View style={{ marginTop: 16, flexDirection: 'row', justifyContent: 'flex-end' }}>
-                <TouchableOpacity onPress={api.hide} style={{ backgroundColor: toneColor, borderRadius: 10, paddingVertical: 10, paddingHorizontal: 16 }}>
-                  <Text style={{ color: '#ffffff', fontWeight: '700' }}>OK</Text>
+              <View style={styles.buttonRow}>
+                <TouchableOpacity onPress={api.hide} style={[styles.button, { backgroundColor: toneColor }]}>
+                  <Text style={styles.buttonText}>OK</Text>
                 </TouchableOpacity>
               </View>
             )}
@@ -92,3 +103,53 @@ export function useThemedNotice() {
   if (!ctx) throw new Error('useThemedNotice must be used inside ThemedNoticeProvider');
   return ctx;
 }
+
+const styles = StyleSheet.create({
+  overlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    justifyContent: 'center',
+    padding: Theme.spacing.lg,
+  },
+  modalContainer: {
+    backgroundColor: Theme.colors.light.background,
+    borderRadius: Theme.borderRadius.lg,
+    borderWidth: 1,
+    borderColor: Theme.colors.light.border,
+    padding: Theme.spacing.lg,
+    ...Theme.shadows.medium,
+  },
+  iconContainer: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: Theme.spacing.sm,
+  },
+  title: {
+    color: Theme.colors.light.text,
+    fontSize: Theme.typography.sizes.heading3,
+    fontWeight: Theme.typography.weights.bold,
+  },
+  message: {
+    color: Theme.colors.light.secondary,
+    marginTop: Theme.spacing.sm,
+    lineHeight: Theme.typography.lineHeights.body,
+    fontSize: Theme.typography.sizes.body,
+  },
+  buttonRow: {
+    marginTop: Theme.spacing.lg,
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+  },
+  button: {
+    borderRadius: Theme.borderRadius.sm,
+    paddingVertical: Theme.spacing.sm,
+    paddingHorizontal: Theme.spacing.lg,
+  },
+  buttonText: {
+    color: '#ffffff',
+    fontWeight: Theme.typography.weights.bold,
+  },
+});

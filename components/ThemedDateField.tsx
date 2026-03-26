@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react';
-import { Modal, Pressable, Text, TouchableOpacity, View } from 'react-native';
+import { Modal, Pressable, Text, TouchableOpacity, View, StyleSheet } from 'react-native';
 import { Calendar, type DateData } from 'react-native-calendars';
 import { Ionicons } from '@expo/vector-icons';
+import { Theme } from '../constants/theme';
 
 type Props = {
   label: string;
@@ -28,7 +29,7 @@ export default function ThemedDateField({ label, value, onChange, required }: Pr
     () => ({
       [draft]: {
         selected: true,
-        selectedColor: '#d9468f',
+        selectedColor: Theme.colors.light.primary,
         selectedTextColor: '#ffffff',
       },
     }),
@@ -48,36 +49,23 @@ export default function ThemedDateField({ label, value, onChange, required }: Pr
   };
 
   return (
-    <View style={{ marginBottom: 14 }}>
-      <Text style={{ color: '#6b5c67', fontSize: 11, fontWeight: '700', marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.6 }}>
+    <View style={styles.container}>
+      <Text style={styles.label}>
         {label}{required ? ' *' : ''}
       </Text>
 
-      <TouchableOpacity
-        onPress={openPicker}
-        style={{
-          backgroundColor: '#ffffff',
-          borderWidth: 1,
-          borderColor: '#f2d7e6',
-          borderRadius: 12,
-          paddingHorizontal: 12,
-          paddingVertical: 12,
-          flexDirection: 'row',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-        }}
-      >
-        <Text style={{ color: '#111111' }}>{selected}</Text>
-        <Ionicons name="calendar-outline" size={16} color="#6b5c67" />
+      <TouchableOpacity onPress={openPicker} style={styles.inputContainer}>
+        <Text style={styles.inputText}>{selected}</Text>
+        <Ionicons name="calendar-outline" size={16} color={Theme.colors.light.secondary} />
       </TouchableOpacity>
 
       <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
-        <Pressable style={{ flex: 1, backgroundColor: '#00000055', justifyContent: 'center', padding: 16 }} onPress={() => setOpen(false)}>
-          <Pressable onPress={(e) => e.stopPropagation()} style={{ backgroundColor: '#ffffffee', borderRadius: 18, borderWidth: 1, borderColor: '#f2d7e6', overflow: 'hidden' }}>
-            <View style={{ paddingHorizontal: 14, paddingTop: 14, paddingBottom: 10, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-              <Text style={{ color: '#111111', fontSize: 16, fontWeight: '800' }}>Pick Date</Text>
+        <Pressable style={styles.overlay} onPress={() => setOpen(false)}>
+          <Pressable onPress={(e) => e.stopPropagation()} style={styles.modalContainer}>
+            <View style={styles.header}>
+              <Text style={styles.headerTitle}>Pick Date</Text>
               <TouchableOpacity onPress={applyToday}>
-                <Text style={{ color: '#db2777', fontWeight: '700' }}>Today</Text>
+                <Text style={styles.todayText}>Today</Text>
               </TouchableOpacity>
             </View>
 
@@ -86,26 +74,26 @@ export default function ThemedDateField({ label, value, onChange, required }: Pr
               onDayPress={(day: DateData) => setDraft(day.dateString)}
               markedDates={markedDates}
               theme={{
-                backgroundColor: '#ffffff',
-                calendarBackground: '#ffffff',
-                textSectionTitleColor: '#6b5c67',
-                dayTextColor: '#111111',
-                todayTextColor: '#db2777',
-                monthTextColor: '#111111',
-                arrowColor: '#db2777',
-                textMonthFontWeight: '700',
-                textDayFontWeight: '500',
-                textDayHeaderFontWeight: '700',
+                backgroundColor: Theme.colors.light.background,
+                calendarBackground: Theme.colors.light.background,
+                textSectionTitleColor: Theme.colors.light.secondary,
+                dayTextColor: Theme.colors.light.text,
+                todayTextColor: Theme.colors.light.primary,
+                monthTextColor: Theme.colors.light.text,
+                arrowColor: Theme.colors.light.primary,
+                textMonthFontWeight: Theme.typography.weights.bold,
+                textDayFontWeight: Theme.typography.weights.medium,
+                textDayHeaderFontWeight: Theme.typography.weights.bold,
               }}
-              style={{ borderTopWidth: 1, borderTopColor: '#f2d7e6', borderBottomWidth: 1, borderBottomColor: '#f2d7e6' }}
+              style={styles.calendar}
             />
 
-            <View style={{ padding: 12, flexDirection: 'row', justifyContent: 'flex-end', gap: 10 }}>
-              <TouchableOpacity onPress={() => setOpen(false)} style={{ backgroundColor: '#fce7f3', borderRadius: 10, paddingHorizontal: 14, paddingVertical: 10 }}>
-                <Text style={{ color: '#111111', fontWeight: '700' }}>Cancel</Text>
+            <View style={styles.footer}>
+              <TouchableOpacity onPress={() => setOpen(false)} style={styles.cancelButton}>
+                <Text style={styles.cancelButtonText}>Cancel</Text>
               </TouchableOpacity>
-              <TouchableOpacity onPress={applyDone} style={{ backgroundColor: '#d9468f', borderRadius: 10, paddingHorizontal: 14, paddingVertical: 10 }}>
-                <Text style={{ color: '#ffffff', fontWeight: '700' }}>Done</Text>
+              <TouchableOpacity onPress={applyDone} style={styles.doneButton}>
+                <Text style={styles.doneButtonText}>Done</Text>
               </TouchableOpacity>
             </View>
           </Pressable>
@@ -114,3 +102,95 @@ export default function ThemedDateField({ label, value, onChange, required }: Pr
     </View>
   );
 }
+
+const styles = StyleSheet.create({
+  container: {
+    marginBottom: Theme.spacing.lg,
+  },
+  label: {
+    color: Theme.colors.light.subtext,
+    fontSize: Theme.typography.sizes.caption,
+    fontWeight: Theme.typography.weights.bold,
+    marginBottom: Theme.spacing.xs,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  inputContainer: {
+    backgroundColor: Theme.colors.light.white,
+    borderWidth: 1,
+    borderColor: Theme.colors.light.border,
+    borderRadius: Theme.borderRadius.md,
+    paddingHorizontal: Theme.spacing.md,
+    height: 48,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  inputText: {
+    color: Theme.colors.light.text,
+    fontSize: Theme.typography.sizes.body,
+  },
+  overlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.4)',
+    justifyContent: 'center',
+    padding: Theme.spacing.lg,
+  },
+  modalContainer: {
+    backgroundColor: Theme.colors.light.background,
+    borderRadius: Theme.borderRadius.lg,
+    borderWidth: 1,
+    borderColor: Theme.colors.light.border,
+    overflow: 'hidden',
+    ...Theme.shadows.medium,
+  },
+  header: {
+    paddingHorizontal: Theme.spacing.md,
+    paddingTop: Theme.spacing.md,
+    paddingBottom: Theme.spacing.sm,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  headerTitle: {
+    color: Theme.colors.light.text,
+    fontSize: Theme.typography.sizes.subheading,
+    fontWeight: Theme.typography.weights.bold,
+  },
+  todayText: {
+    color: Theme.colors.light.primary,
+    fontWeight: Theme.typography.weights.bold,
+  },
+  calendar: {
+    borderTopWidth: 1,
+    borderTopColor: Theme.colors.light.border,
+    borderBottomWidth: 1,
+    borderBottomColor: Theme.colors.light.border,
+  },
+  footer: {
+    padding: Theme.spacing.md,
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: Theme.spacing.sm,
+  },
+  cancelButton: {
+    backgroundColor: Theme.colors.light.disabled,
+    borderRadius: Theme.borderRadius.sm,
+    paddingHorizontal: Theme.spacing.md,
+    paddingVertical: Theme.spacing.sm,
+  },
+  cancelButtonText: {
+    color: Theme.colors.light.text,
+    fontWeight: Theme.typography.weights.bold,
+  },
+  doneButton: {
+    backgroundColor: Theme.colors.light.primary,
+    borderRadius: Theme.borderRadius.sm,
+    paddingHorizontal: Theme.spacing.md,
+    paddingVertical: Theme.spacing.sm,
+  },
+  doneButtonText: {
+    color: Theme.colors.light.white,
+    fontWeight: Theme.typography.weights.bold,
+  },
+});

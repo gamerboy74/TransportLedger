@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { View, Text, FlatList, TouchableOpacity, RefreshControl, Modal, TextInput, Pressable } from 'react-native';
+import { View, Text, FlatList, TouchableOpacity, RefreshControl, Modal, Pressable } from 'react-native';
 import { router, useFocusEffect } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -9,6 +9,7 @@ import { SkeletonBlock, SkeletonCard } from '../../components/Skeleton';
 import { useThemedNotice } from '../../components/ThemedNoticeProvider';
 import ThemedConfirmModal from '../../components/ThemedConfirmModal';
 import { deleteTransportOwner, upsertTransportOwner } from '../../lib/queries';
+import { ThemedTextInput } from '../../components/ThemedTextInput';
 import { fetchTransportersSummary } from '../../lib/summaries';
 import { fmtShort, monthKey, monthLabel } from '../../constants/defaults';
 import type { TransportOwner } from '../../types';
@@ -111,6 +112,18 @@ export default function TransportersScreen() {
                 <TouchableOpacity
                   onPress={() => {
                     swipeRefs.current[owner.id]?.close();
+                    setEditingOwner(owner);
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Edit transport owner"
+                  style={{ width: 82, marginRight: 6, borderRadius: 12, backgroundColor: '#3b82f6', alignItems: 'center', justifyContent: 'center' }}
+                >
+                  <Ionicons name="create-outline" size={16} color="#ffffff" />
+                  <Text style={{ color: '#ffffff', fontSize: 11, marginTop: 3, fontWeight: '700' }}>Edit</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() => {
+                    swipeRefs.current[owner.id]?.close();
                     setOwnerToDelete(owner);
                   }}
                   accessibilityRole="button"
@@ -186,7 +199,7 @@ export default function TransportersScreen() {
         }}
       />
 
-      <EditOwnerRatesModal
+      <EditOwnerModal
         owner={editingOwner}
         visible={!!editingOwner}
         onClose={() => setEditingOwner(null)}
@@ -254,10 +267,16 @@ function AddOwnerModal({ visible, onClose, onSaved }: { visible: boolean; onClos
           <Text style={{ color: '#111111', fontSize: 20, fontWeight: 'bold' }}>Add Transport Owner</Text>
           <TouchableOpacity onPress={onClose}><Text style={{ color: '#db2777' }}>Cancel</Text></TouchableOpacity>
         </View>
-        <F label="Name *" value={name} onChange={setName} placeholder="e.g. Sushil Kumar Bhagat" />
-        <F label="Contact" value={contact} onChange={setContact} placeholder="Phone number" kb="phone-pad" />
-        <F label="Commission Rate (₹/tonne) *" value={commRate} onChange={setComm} placeholder="e.g. 15" kb="decimal-pad" />
-        <F label="Accidental Rate (₹/tonne) *" value={accRate} onChange={setAcc} placeholder="e.g. 5" kb="decimal-pad" />
+        <ThemedTextInput label="Name *" value={name} onChangeText={setName} placeholder="e.g. Sushil Kumar Bhagat" />
+        <ThemedTextInput label="Contact" value={contact} onChangeText={setContact} placeholder="Phone number" keyboardType="phone-pad" />
+        <View style={{ flexDirection: 'row', gap: 12 }}>
+          <View style={{ flex: 1 }}>
+            <ThemedTextInput label="Commission (₹/T) *" value={commRate} onChangeText={setComm} placeholder="e.g. 15" keyboardType="decimal-pad" />
+          </View>
+          <View style={{ flex: 1 }}>
+            <ThemedTextInput label="Accidental (₹/T) *" value={accRate} onChangeText={setAcc} placeholder="e.g. 5" keyboardType="decimal-pad" />
+          </View>
+        </View>
         <TouchableOpacity onPress={save} disabled={saving}
           style={{ backgroundColor: saving ? '#d4d4d8' : '#d9468f', borderRadius: 14, padding: 16, alignItems: 'center', marginTop: 8 }}>
           <Text style={{ color: 'white', fontWeight: 'bold', fontSize: 16 }}>{saving ? 'Saving...' : 'Save Owner'}</Text>
@@ -267,7 +286,7 @@ function AddOwnerModal({ visible, onClose, onSaved }: { visible: boolean; onClos
   );
 }
 
-function EditOwnerRatesModal({
+function EditOwnerModal({
   owner,
   visible,
   onClose,
@@ -278,6 +297,8 @@ function EditOwnerRatesModal({
   onClose: () => void;
   onSaved: () => void;
 }) {
+  const [name, setName] = useState('');
+  const [contact, setContact] = useState('');
   const [commRate, setCommRate] = useState('');
   const [accRate, setAccRate] = useState('');
   const [saving, setSaving] = useState(false);
@@ -285,12 +306,15 @@ function EditOwnerRatesModal({
 
   useEffect(() => {
     if (!owner || !visible) return;
+    setName(owner.name);
+    setContact(owner.contact ?? '');
     setCommRate(String(owner.commission_rate ?? ''));
     setAccRate(String(owner.accidental_rate ?? ''));
   }, [owner, visible]);
 
   const save = async () => {
     if (!owner) return;
+    if (!name.trim()) { notice.showInfo('Required', 'Name is required'); return; }
     const cr = parseFloat(commRate);
     const ar = parseFloat(accRate);
     if (isNaN(cr) || isNaN(ar)) {
@@ -302,12 +326,12 @@ function EditOwnerRatesModal({
     try {
       await upsertTransportOwner({
         id: owner.id,
-        name: owner.name,
-        contact: owner.contact,
+        name: name.trim(),
+        contact: contact.trim() || null,
         commission_rate: cr,
         accidental_rate: ar,
       });
-      notice.showSuccess('Saved', 'Owner rates updated.');
+      notice.showSuccess('Saved', 'Owner details updated.');
       onSaved();
     } catch (e) {
       notice.showError('Error', String(e));
@@ -320,14 +344,22 @@ function EditOwnerRatesModal({
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
       <Pressable style={{ flex: 1, backgroundColor: '#00000055', justifyContent: 'center', padding: 16 }} onPress={onClose}>
         <Pressable onPress={(e) => e.stopPropagation()} style={{ backgroundColor: '#fff7fb', borderRadius: 18, borderWidth: 1, borderColor: '#f2d7e6', padding: 16 }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-            <Text style={{ color: '#111111', fontSize: 18, fontWeight: '800' }}>Edit Rates</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+            <Text style={{ color: '#111111', fontSize: 18, fontWeight: '800' }}>Edit Owner</Text>
             <TouchableOpacity onPress={onClose}><Text style={{ color: '#db2777', fontWeight: '700' }}>Close</Text></TouchableOpacity>
           </View>
-          <Text style={{ color: '#6b5c67', marginBottom: 14 }} numberOfLines={1} ellipsizeMode="tail">{owner?.name}</Text>
+          
+          <ThemedTextInput label="Name *" value={name} onChangeText={setName} placeholder="e.g. Sushil Kumar Bhagat" />
+          <ThemedTextInput label="Contact" value={contact} onChangeText={setContact} placeholder="Phone number" keyboardType="phone-pad" />
 
-          <F label="Commission Rate (₹/tonne) *" value={commRate} onChange={setCommRate} placeholder="e.g. 15" kb="decimal-pad" />
-          <F label="Accidental Rate (₹/tonne) *" value={accRate} onChange={setAccRate} placeholder="e.g. 5" kb="decimal-pad" />
+          <View style={{ flexDirection: 'row', gap: 12 }}>
+            <View style={{ flex: 1 }}>
+              <ThemedTextInput label="Commission (₹/T) *" value={commRate} onChangeText={setCommRate} placeholder="e.g. 15" keyboardType="decimal-pad" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <ThemedTextInput label="Accidental (₹/T) *" value={accRate} onChangeText={setAccRate} placeholder="e.g. 5" keyboardType="decimal-pad" />
+            </View>
+          </View>
 
           <TouchableOpacity onPress={save} disabled={saving}
             style={{ backgroundColor: saving ? '#d4d4d8' : '#d9468f', borderRadius: 12, padding: 14, alignItems: 'center', marginTop: 2 }}>
@@ -339,6 +371,8 @@ function EditOwnerRatesModal({
   );
 }
 
+// Helper removed since we use ThemedTextInput now
+/*
 function F({ label, value, onChange, placeholder, kb = 'default' }: any) {
   return (
     <View style={{ marginBottom: 16 }}>
@@ -348,3 +382,4 @@ function F({ label, value, onChange, placeholder, kb = 'default' }: any) {
     </View>
   );
 }
+*/

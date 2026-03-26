@@ -6,11 +6,13 @@ import { ThemedNoticeProvider } from '../components/ThemedNoticeProvider';
 import { AppDataProvider } from '../components/AppDataProvider';
 import { OfflineQueueManager } from '../components/OfflineQueueManager';
 import { OfflineQueueNoticeBridge } from '../components/OfflineQueueNoticeBridge';
+import { ErrorBoundary } from '../components/ErrorBoundary';
 import '../global.css';
 
 export default function RootLayout() {
   return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
+    <ErrorBoundary>
+      <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
         <ThemedNoticeProvider>
           <AppDataProvider>
@@ -22,5 +24,6 @@ export default function RootLayout() {
         </ThemedNoticeProvider>
       </SafeAreaProvider>
     </GestureHandlerRootView>
+    </ErrorBoundary>
   );
 }

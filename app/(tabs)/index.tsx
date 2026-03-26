@@ -100,11 +100,14 @@ export default function HomeScreen() {
           </View>
           <View style={{ flexDirection: 'row', gap: 10 }}>
             <OfflineQueueButton />
+            <Pressable onPress={() => router.push('/trip-history' as any)} style={({ pressed }) => ({ width: 36, height: 36, borderRadius: 18, backgroundColor: '#ffffff', borderWidth: 1, borderColor: C.border, alignItems: 'center', justifyContent: 'center', transform: [{ scale: pressed ? 0.96 : 1 }] })}>
+              <Ionicons name="time-outline" size={18} color="#111111" />
+            </Pressable>
             <Pressable onPress={() => router.push('/(tabs)/entry')} style={({ pressed }) => ({ width: 36, height: 36, borderRadius: 18, backgroundColor: '#ffffff', borderWidth: 1, borderColor: C.border, alignItems: 'center', justifyContent: 'center', transform: [{ scale: pressed ? 0.96 : 1 }] })}>
               <Ionicons name="add" size={18} color="#111111" />
             </Pressable>
-            <Pressable onPress={() => router.push('/(tabs)/reports')} style={({ pressed }) => ({ width: 36, height: 36, borderRadius: 18, backgroundColor: '#ffffff', borderWidth: 1, borderColor: C.border, alignItems: 'center', justifyContent: 'center', transform: [{ scale: pressed ? 0.96 : 1 }] })}>
-              <Ionicons name="chatbubble-ellipses-outline" size={16} color="#111111" />
+            <Pressable onPress={() => router.push('/settings')} style={({ pressed }) => ({ width: 36, height: 36, borderRadius: 18, backgroundColor: '#ffffff', borderWidth: 1, borderColor: C.border, alignItems: 'center', justifyContent: 'center', transform: [{ scale: pressed ? 0.96 : 1 }] })}>
+              <Ionicons name="settings-outline" size={18} color="#111111" />
             </Pressable>
           </View>
         </View>
